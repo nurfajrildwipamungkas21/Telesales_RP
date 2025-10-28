@@ -367,8 +367,14 @@ def recommend(segment: str, signals: Dict) -> List[Dict]:
 # === A6: Sidebar/state ========================================================
 with st.sidebar:
     st.title("RG Telesales - Role-Play")
-    audience = st.selectbox("Peran lawan bicara", ["Orang Tua", "Murid"], index=0, key="aud")
-    segment = st.selectbox("Segmen kelas", ["SD", "SMP", "SMA"], index=1, key="seg")
+    _aud_opts = ["Orang Tua", "Murid"]
+    _seg_opts = ["SD", "SMP", "SMA"]
+    _aud_idx = _aud_opts.index(st.session_state.get("aud", "Orang Tua")) \
+        if st.session_state.get("aud") in _aud_opts else 0
+    _seg_idx = _seg_opts.index(st.session_state.get("seg", "SMP")) \
+        if st.session_state.get("seg") in _seg_opts else 1
+    audience = st.selectbox("Peran lawan bicara", _aud_opts, index=_aud_idx, key="aud")
+    segment  = st.selectbox("Segmen kelas", _seg_opts, index=_seg_idx, key="seg")
     if os.getenv("SHOW_MODEL_INFO") == "1":
         st.caption(f"SDK: {SDK} | Model: {MODEL_PRIMARY}")
     st.divider()
