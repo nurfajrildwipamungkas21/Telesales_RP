@@ -94,38 +94,68 @@ CATALOG = {
     ]
 }
 
-# === A4b: Pool skenario opener ===============================================
-OPENER_POOL: Dict[str, List[str]] = {
-    "Murid": [
-        "Bingung bagi waktu antara tugas harian dan persiapan ulangan; sering kejar deadline.",
-        "Nilai Fisika turun karena kesulitan konsep gaya dan gerak; takut salah tanya di kelas.",
-        "Matematika bab persamaan kuadrat mentok; latihan sudah dicoba tapi masih salah di langkah awal.",
-        "UTBK mulai dekat; susah konsisten belajar tiap hari karena ekskul dan les.",
-        "Gangguan HP dan notifikasi bikin fokus pecah saat belajar di rumah.",
-        "Kimia stoikiometri bikin pusing; butuh cara cepet paham tanpa hafalan rumus panjang.",
-        "Sulit memahami teks panjang Bahasa Indonesia; bingung cara nyari ide pokok cepat.",
-        "Cemas presentasi Bahasa Inggris; ingin sounding natural tapi grogi berat."
-    ],
-    "Orang Tua": [
-        "Anak sulit lepas dari HP saat jam belajar; tugas sering ditunda.",
-        "Nilai Matematika menurun dua bulan terakhir; remedial berulang tidak efektif.",
-        "Menjelang kenaikan kelas, jadwal padat; perlu pola belajar fleksibel dan terukur.",
-        "Anak cepat bosan saat belajar IPA; minta pendekatan yang lebih praktis.",
-        "Kesulitan adaptasi setelah pindah sekolah; ritme belajar belum stabil.",
-        "Orangtua butuh cara memonitor progres tanpa harus mendampingi terus-menerus.",
-        "Anak takut tanya di kelas; perlu cara bangun kepercayaan diri akademik.",
-        "Les privat mahal; ingin alternatif yang lebih efisien tapi tetap berdampak."
-    ]
+# === A4b: Pool skenario opener (segment-aware) ===============================
+OPENER_POOL: Dict[str, Dict[str, List[str]]] = {
+    "Murid": {
+        "SD": [
+            "Perkalian dan pembagian masih sering salah; PR Matematika terasa berat.",
+            "Sulit memahami bacaan panjang; suka kebingungan cari ide pokok.",
+            "IPA dasar tentang tumbuhan dan hewan membingungkan saat ulangan.",
+            "Gampang terdistraksi main gim saat jam belajar; susah fokus 20 menit penuh.",
+            "Kesulitan menulis rapi dan cepat saat dikte; ketinggalan materi.",
+        ],
+        "SMP": [
+            "Nilai Fisika tentang gaya dan gerak turun; bingung rumus dan satuan.",
+            "Aljabar dan persamaan linear bikin mentok; salah di langkah awal.",
+            "Bahasa Inggris reading panjang bikin kewalahan; kosakata kurang.",
+            "Sering kehabisan waktu karena ekskul; tugas menumpuk jelang ulangan.",
+            "Kimia pengantar zat dan perubahan wujud masih rancu.",
+        ],
+        "SMA": [
+            "Trigonometri dan limit membingungkan; nilai kuis turun.",
+            "UTBK makin dekat; sulit konsisten belajar setiap hari.",
+            "Fisika kinematika sering salah di konversi satuan.",
+            "Kimia stoikiometri panjang; bingung analisis mol dan massa.",
+            "Ekonomi mikro: elastisitas dan kurva permintaan-penawaran masih salah konsep.",
+        ],
+    },
+    "Orang Tua": {
+        "SD": [
+            "Anak mudah terdistraksi HP saat belajar; PR sering ditunda.",
+            "Membaca pemahaman masih lemah; perlu latihan bertahap.",
+            "Sulit duduk fokus lebih dari 15 menit; butuh pola belajar singkat.",
+            "Ingin cara memantau progres tanpa harus mendampingi terus-menerus.",
+        ],
+        "SMP": [
+            "Nilai Matematika menurun dua bulan terakhir; remedial sering tidak tuntas.",
+            "Anak malu bertanya di kelas; konsep IPA kurang kuat.",
+            "Jadwal ekskul padat; tugas dan ulangan sering berbenturan.",
+            "Butuh kebiasaan belajar teratur tanpa harus dimarahi.",
+        ],
+        "SMA": [
+            "Persiapan UTBK belum terarah; anak sulit konsisten.",
+            "Bingung pemilihan jurusan; perlu arahan fokus mata pelajaran.",
+            "Belajar mandiri tapi cepat burnout; perlu ritme yang sehat.",
+            "Orangtua ingin laporan progres yang ringkas dan objektif.",
+        ],
+    },
 }
 
 def _sample_scenario(audience: str, segment: str) -> str:
-    pool = OPENER_POOL.get(audience, [])
-    if not pool:
-        return "Keluhan belajar umum sesuai jenjang, tanpa menyebut produk."
-    # seed ringan agar lebih variatif lintas klik
-    rnd_seed = time.time_ns() ^ hash(segment) ^ random.getrandbits(32)
+    pool_aud = OPENER_POOL.get(audience, {})
+    pool_seg: List[str] = []
+    if isinstance(pool_aud, dict):
+        pool_seg = pool_aud.get(segment, [])
+    if not pool_seg and isinstance(pool_aud, dict):
+        merged: List[str] = []
+        for lst in pool_aud.values():
+            merged.extend(lst)
+        pool_seg = merged
+    if not pool_seg:
+        return "Keluhan belajar sesuai jenjang saat ini, tanpa menyebut produk."
+    rnd_seed = time.time_ns() ^ hash((audience, segment)) ^ random.getrandbits(32)
     random.seed(rnd_seed)
-    return random.choice(pool)
+    return random.choice(pool_seg)
 
 # === A5: Prompt untuk persona non-sales ======================================
 def build_system_prompt(audience: str, segment: str) -> str:
@@ -138,11 +168,19 @@ def build_system_prompt(audience: str, segment: str) -> str:
         "Jika ditanya produk secara langsung: jawab tidak tahu detail produk; kembalikan fokus ke pengalaman pribadi dan kebutuhan.",
     ])
 
+SEG_RULES = {
+    "SD": "Hindari istilah Fisika, Kimia, UTBK; fokus literasi, numerasi dasar, IPA sederhana, kebiasaan belajar.",
+    "SMP": "Hindari UTBK dan materi SMA; fokus aljabar dasar, IPA terapan, manajemen waktu.",
+    "SMA": "Boleh UTBK dan materi lanjutan; hindari topik terlalu dasar SD/SMP.",
+}
+
 def build_opener_instruction(audience: str, segment: str) -> str:
     scenario = st.session_state.get("opener_scenario") or _sample_scenario(audience, segment)
+    rule = SEG_RULES.get(segment, "")
     return (
         f"Buat pembuka percakapan 1–2 kalimat sebagai {audience} segmen {segment}. "
         f"Gunakan skenario: {scenario}. "
+        f"Patuh aturan segmen: {rule} "
         "Natural, tanpa menyebut produk atau paket. Variasikan diksi agar berbeda setiap kali."
     )
 
