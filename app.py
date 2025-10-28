@@ -3,7 +3,8 @@
 # Streamlit Chat - Telesales Ruangguru (Role-Play)
 # Kompatibel SDK baru (google-genai) dan SDK lama (google.generativeai)
 # Perbaikan: persona = Orang Tua/Murid (bukan sales), opener oleh assistant,
-# avatar dibedakan, hilangkan duplikasi render, prompt anti-pitching.
+# avatar dibedakan, hilangkan duplikasi render, prompt anti-pitching,
+# hindari overwrite key widget via bot_persona.
 # =============================================================================
 import os
 import json
@@ -118,11 +119,16 @@ def recommend(segment: str, signals: Dict) -> List[Dict]:
     hasil = []
     for item in pilihan:
         skor = 0
-        if signals.get("fokus_ujian") and "UTBK" in item["nama"]: skor += 3
-        if signals.get("butuh_live") and ("Live" in item["nama"] or any("Live" in f for f in item["fitur"])): skor += 2
-        if signals.get("butuh_latihan") and any(("Bank soal" in f) or ("Tryout" in f) for f in item["fitur"]): skor += 2
-        if segment == "SD" and "Video" in item["nama"] and signals.get("konsep_dasar"): skor += 2
-        if segment in ["SMP", "SMA"] and "Paket" in item["nama"]: skor += 1
+        if signals.get("fokus_ujian") and "UTBK" in item["nama"]:
+            skor += 3
+        if signals.get("butuh_live") and ("Live" in item["nama"] or any("Live" in f for f in item["fitur"])):
+            skor += 2
+        if signals.get("butuh_latihan") and any(("Bank soal" in f) or ("Tryout" in f) for f in item["fitur"]):
+            skor += 2
+        if segment == "SD" and "Video" in item["nama"] and signals.get("konsep_dasar"):
+            skor += 2
+        if segment in ["SMP", "SMA"] and "Paket" in item["nama"]:
+            skor += 1
         hasil.append({"skor": skor, **item})
     hasil.sort(key=lambda x: x["skor"], reverse=True)
     return hasil[:3]
@@ -145,17 +151,22 @@ if "suppress_next_reply" not in st.session_state:
 if "intent" not in st.session_state:
     st.session_state.intent = None  # None | "opener"
 if "internal_triggers" not in st.session_state:
-    st.session_state.internal_triggers = set()  # penanda pesan sintetis
+    st.session_state.internal_triggers = []  # penanda pesan sintetis
+if "bot_persona" not in st.session_state:
+    st.session_state.bot_persona = audience
+
+# persona efektif untuk bot, terpisah dari widget selectbox
+effective_audience = st.session_state.get("bot_persona", audience)
 
 # === A7: Opener ===============================================================
 def _trigger_model_opener(target_audience: str):
-    # set persona di UI agar konsisten
-    st.session_state.aud = target_audience
+    # set persona bot tanpa menyentuh key widget 'aud'
+    st.session_state.bot_persona = target_audience
     st.session_state.intent = "opener"
     # tambahkan ping sintetis agar A17 memicu generate_reply tanpa tampil di UI
     ping = "⏩ OPENER"
     st.session_state.messages.append({"role": "user", "content": ping})
-    st.session_state.internal_triggers.add(ping)
+    st.session_state.internal_triggers.append(ping)
     st.session_state.suppress_next_reply = False
 
 c1, c2, c3 = st.columns(3)
@@ -169,7 +180,7 @@ if c3.button("Minta Rekomendasi"):
 
 # === A8: Header + rekomendasi cepat (UI informatif) ==========================
 st.markdown("## Chat Role-Play")
-sys_prompt = build_system_prompt(audience, segment)
+sys_prompt = build_system_prompt(effective_audience, segment)
 top_reco = recommend(segment, st.session_state.signals)
 with st.expander("Rekomendasi cepat - ringkas (UI saja)"):
     for r in top_reco:
@@ -192,7 +203,7 @@ for m in st.session_state.messages[-max_history:]:
         # sembunyikan ping sintetis dari UI
         continue
     role = "user" if m["role"] == "user" else "assistant"
-    avatar = AVATAR_USER if role == "user" else _bot_avatar(st.session_state.aud)
+    avatar = AVATAR_USER if role == "user" else _bot_avatar(effective_audience)
     with st.chat_message(role, avatar=avatar):
         st.markdown(m["content"])
 
@@ -313,7 +324,7 @@ def _build_config_new(sys_text: str):
 # === A16: Generator abstrak ===================================================
 def generate_reply() -> str:
     opener_mode = st.session_state.intent == "opener"
-    prompt = build_prompt(st.session_state.messages, audience, segment, opener=opener_mode)
+    prompt = build_prompt(st.session_state.messages, effective_audience, segment, opener=opener_mode)
 
     if SDK == "new":
         cfg = _build_config_new(sys_prompt)
@@ -423,7 +434,7 @@ if (
     and st.session_state.messages[-1]["role"] == "user"
     and not st.session_state.suppress_next_reply
 ):
-    with st.chat_message("assistant", avatar=_bot_avatar(st.session_state.aud)):
+    with st.chat_message("assistant", avatar=_bot_avatar(effective_audience)):
         reply = generate_reply()
         st.session_state.messages.append({"role": "assistant", "content": reply})
     # reset intent setelah opener dipicu
