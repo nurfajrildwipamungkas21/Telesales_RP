@@ -12,6 +12,7 @@ import re
 import random
 import sqlite3
 import uuid
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Any
@@ -202,6 +203,23 @@ def delete_convo(convo_id: str):
         for k in ["convo_id", "convo_title"]:
             st.session_state.pop(k, None)
 
+# === A3d: Deep-link loader (?open=<convo_id>) ================================
+def _maybe_open_from_query():
+    open_id = None
+    try:
+        # Streamlit >=1.30
+        qp = st.query_params
+        open_id = qp.get("open", None)
+        if isinstance(open_id, list):
+            open_id = open_id[0] if open_id else None
+    except Exception:
+        qp = st.experimental_get_query_params()
+        open_id = (qp.get("open") or [None])[0]
+    if open_id and st.session_state.get("convo_id") != open_id:
+        load_convo(open_id)
+
+_maybe_open_from_query()
+
 # === A4: Data katalog (UI saja; tidak dimasukkan ke prompt) ==================
 CATALOG = {
     "SD": [
@@ -369,6 +387,42 @@ def recommend(segment: str, signals: Dict) -> List[Dict]:
     hasil.sort(key=lambda x: x["skor"], reverse=True)
     return hasil[:3]
 
+# === A5b: QR generator ========================================================
+QR_LIB = None
+try:
+    import qrcode
+    QR_LIB = "qrcode"
+except Exception:
+    try:
+        import segno  # noqa: F401
+        QR_LIB = "segno"
+    except Exception:
+        QR_LIB = None
+
+def _qr_png_bytes(data: str, box_size: int = 8, border: int = 2) -> bytes:
+    if not data:
+        return b""
+    if QR_LIB == "qrcode":
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=box_size,
+            border=border,
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    elif QR_LIB == "segno":
+        import segno
+        q = segno.make(data, error="m")
+        buf = BytesIO()
+        q.save(buf, kind="png", scale=box_size, border=border)
+        return buf.getvalue()
+    return b""
+
 # === A6: Sidebar/state ========================================================
 with st.sidebar:
     st.title("RG Telesales - Role-Play")
@@ -382,6 +436,7 @@ with st.sidebar:
     segment  = st.selectbox("Segmen kelas", _seg_opts, index=_seg_idx, key="seg")
     if os.getenv("SHOW_MODEL_INFO") == "1":
         st.caption(f"SDK: {SDK} | Model: {MODEL_PRIMARY}")
+
     st.divider()
     st.subheader("Riwayat Chat", anchor=False)
     convos = list_convos()
@@ -412,6 +467,21 @@ with st.sidebar:
     with cols[2]:
         if st.button("Hapus", key="btn_delete_hist", use_container_width=True) and convos:
             delete_convo(convos[sel_idx]["id"])
+
+    # === QR link section ======================================================
+    st.divider()
+    st.subheader("QR Tautan", anchor=False)
+    base_url = os.getenv("APP_BASE_URL", "https://telesalesrp.streamlit.app/")
+    _sel_id = (convos[sel_idx]["id"] if convos else None) or st.session_state.get("convo_id")
+    _default_url = f"{base_url}?open={_sel_id}" if _sel_id else base_url
+    qr_url = st.text_input("URL untuk QR", value=_default_url, key="qr_url_inp")
+    if QR_LIB:
+        png = _qr_png_bytes(qr_url, box_size=8, border=2)
+        if png:
+            st.image(png, caption="Scan dengan kamera ponsel", use_container_width=True)
+            st.download_button("Unduh QR", data=png, file_name="qr_link.png", mime="image/png", use_container_width=True)
+    else:
+        st.info("Tambahkan dependensi: qrcode[pil] atau segno ke requirements.txt untuk mengaktifkan QR.")
 
 # === State init + autosave awal ==============================================
 if "messages" not in st.session_state:
