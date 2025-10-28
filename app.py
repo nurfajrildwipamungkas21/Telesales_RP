@@ -1,16 +1,17 @@
 # app.py
 # =============================================================================
 # Streamlit Chat - Telesales Ruangguru (Role-Play) + Gemini 2.5 Flash
-# Optimized: cached model, batched streaming, opener tidak auto-reply,
-# avatar dibedakan, layout aman, fallback non-stream
+# Stabil: prompt ringkas, streaming aman, fallback non-stream, avatar dibedakan
 # =============================================================================
+import os
 import json
 import time
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Iterable, Optional
 
 import streamlit as st
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # === A0: Page config + CSS ====================================================
 st.set_page_config(page_title="RG Telesales - Role-Play Chat", layout="wide")
@@ -32,13 +33,23 @@ html, body {scroll-behavior: smooth;}
 )
 
 # === A1: Kunci dan Model (cached) ============================================
-API_KEY = "AIzaSyDd19AHP6cciyErg-bky3u07fXVGnXaraE"
+API_KEY = os.getenv(
+    "GEMINI_API_KEY",
+    "AIzaSyDd19AHP6cciyErg-bky3u07fXVGnXaraE"  # demo key untuk portfolio
+)
 MODEL_NAME = "models/gemini-2.5-flash"
+
+SAFETY_SETTINGS = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    HarmCategory.HARM_CATEGORY_SEXUAL_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+}
 
 @st.cache_resource(show_spinner=False)
 def _init_model():
     genai.configure(api_key=API_KEY)
-    return genai.GenerativeModel(model_name=MODEL_NAME)
+    return genai.GenerativeModel(model_name=MODEL_NAME, safety_settings=SAFETY_SETTINGS)
 
 model = _init_model()
 
@@ -129,7 +140,7 @@ sys_prompt = build_system_prompt(audience, segment)
 top_reco = recommend(segment, st.session_state.signals)
 with st.expander("Rekomendasi cepat - dinamis, non-binding"):
     for r in top_reco:
-        st.write(f"{r['nama']} - fitur: {', '.join(r['fitur'])} | cocok: {', '.join(r['cocok'])}")
+        st.write(f"{r['nama']} • fitur: {', '.join(r['fitur'])} • cocok: {', '.join(r['cocok'])}")
 
 # === A9: Input pengguna sebelum render chat ==================================
 user_input = st.chat_input("Ketik pesan Anda di sini")
@@ -138,8 +149,8 @@ if user_input:
     st.session_state.suppress_next_reply = False
 
 # === A10: Render riwayat dengan avatar valid =================================
-AVATAR_USER = "👤"
-AVATAR_BOT  = "🤖"
+AVATAR_USER = "U"
+AVATAR_BOT  = "G"
 
 for m in st.session_state.messages[-max_history:]:
     role = "user" if m["role"] == "user" else "assistant"
@@ -163,14 +174,64 @@ def build_prompt(messages: List[Dict], sys_text: str, audience: str, segment: st
     return (
         f"[META]\n{json.dumps(meta, ensure_ascii=False)}\n\n"
         f"[SYSTEM]\n{sys_text}\n"
-        "Taktik: ringkas, mulai dengan 1 sampai 2 pertanyaan klarifikasi, akhiri opsi tindak lanjut tanpa menekan. "
+        "Taktik: ringkas, mulai dengan 1–2 pertanyaan klarifikasi, akhiri opsi tindak lanjut tanpa menekan. "
         "Batas 6 baris.\n\n"
         f"[CATALOG]\n{json.dumps(CATALOG.get(segment, []), ensure_ascii=False)}\n\n"
         f"[CONTEXT]\nPercakapan sebelumnya:\n{convo}\n\n[RESPON]"
     )
 
-# === A12: Generate - streaming batched dengan fallback non-stream ============
-def generate_reply():
+# === A12: Util ekstraksi teks ================================================
+def _extract_text_from_response(resp) -> str:
+    # 1) accessor cepat
+    try:
+        t = getattr(resp, "text", None)
+        if isinstance(t, str) and t.strip():
+            return t
+    except Exception:
+        pass
+    # 2) telusuri candidates → parts
+    try:
+        buf: List[str] = []
+        for cand in (getattr(resp, "candidates", None) or []):
+            content = getattr(cand, "content", None)
+            parts = getattr(content, "parts", None) or []
+            for p in parts:
+                tx = getattr(p, "text", None)
+                if isinstance(tx, str) and tx:
+                    buf.append(tx)
+        if buf:
+            return "".join(buf)
+    except Exception:
+        pass
+    # 3) cek block reason untuk feedback eksplisit
+    fb = getattr(resp, "prompt_feedback", None)
+    reason = getattr(fb, "block_reason", None) if fb else None
+    if reason:
+        return f"Tidak ada keluaran karena diblokir kebijakan: {reason}"
+    return ""
+
+def _extract_text_from_stream(event) -> Optional[str]:
+    # beberapa versi SDK memberi delta di event.text, sebagian lain di parts[0].text
+    try:
+        t = getattr(event, "text", None)
+        if isinstance(t, str) and t:
+            return t
+    except Exception:
+        pass
+    try:
+        for cand in (getattr(event, "candidates", None) or []):
+            content = getattr(cand, "content", None)
+            parts = getattr(content, "parts", None) or []
+            for p in parts:
+                tx = getattr(p, "text", None)
+                if isinstance(tx, str) and tx:
+                    return tx
+    except Exception:
+        pass
+    return None
+
+# === A13: Generate - streaming aman + fallback non-stream =====================
+def generate_reply() -> str:
     prompt = build_prompt(st.session_state.messages, sys_prompt, audience, segment)
     cfg = genai.types.GenerationConfig(
         temperature=float(temperature),
@@ -180,47 +241,55 @@ def generate_reply():
         candidate_count=1,
     )
 
-    # streaming
+    # streaming aman
     try:
-        resp = model.generate_content(
+        resp_stream = model.generate_content(
             prompt,
             generation_config=cfg,
             stream=True,
         )
         area = st.empty()
-        buf = []
-        last = time.perf_counter()
-        BATCH_CHARS = 120
-        MIN_INTERVAL = 0.03
+        pieces: List[str] = []
+        last_push = time.perf_counter()
+        BATCH_CHARS = 160
+        MIN_INTERVAL = 0.04
         pending = 0
-        for event in resp:
-            chunk = getattr(event, "text", None)
-            if not chunk:
+
+        for event in resp_stream:
+            piece = _extract_text_from_stream(event)
+            if not piece:
                 continue
-            buf.append(chunk)
-            pending += len(chunk)
+            pieces.append(piece)
+            pending += len(piece)
             now = time.perf_counter()
-            if pending >= BATCH_CHARS or (now - last) >= MIN_INTERVAL:
-                area.markdown("".join(buf))
+            if pending >= BATCH_CHARS or (now - last_push) >= MIN_INTERVAL:
+                area.markdown("".join(pieces))
                 pending = 0
-                last = now
-        final = "".join(buf).strip()
+                last_push = now
+
+        final = "".join(pieces).strip()
         if final:
             area.markdown(final)
-        return final or " "
-    except Exception as e_stream:
-        # fallback non-stream
-        try:
-            resp2 = model.generate_content(
-                prompt,
-                generation_config=cfg,
-                stream=False,
-            )
-            return (getattr(resp2, "text", None) or "").strip() or " "
-        except Exception as e_fallback:
-            return f"Gagal memproses: {type(e_stream).__name__}: {e_stream} || fallback {type(e_fallback).__name__}: {e_fallback}"
+            return final
 
-# === A13: Eksekusi balasan jika bukan opener =================================
+        # jika kosong → coba non-stream
+    except Exception:
+        # lanjut ke fallback
+        pass
+
+    # fallback non-stream
+    try:
+        resp = model.generate_content(
+            prompt,
+            generation_config=cfg,
+            stream=False,
+        )
+        text = _extract_text_from_response(resp).strip()
+        return text or "Model tidak mengembalikan teks"
+    except Exception as e_fallback:
+        return f"Gagal memproses: {type(e_fallback).__name__}: {e_fallback}"
+
+# === A14: Eksekusi balasan jika bukan opener =================================
 if (
     st.session_state.messages
     and st.session_state.messages[-1]["role"] == "user"
@@ -231,8 +300,8 @@ if (
         st.session_state.messages.append({"role": "assistant", "content": reply})
         st.markdown(reply)
 
-# === A14: Export transcript ===================================================
-def to_markdownTranscript(msgs: List[Dict]) -> str:
+# === A15: Export transcript ===================================================
+def to_markdown_transcript(msgs: List[Dict]) -> str:
     lines = ["# Transcript - RG Telesales Role-Play", ""]
     for m in msgs:
         who = "User" if m["role"] == "user" else "Assistant"
@@ -242,7 +311,7 @@ def to_markdownTranscript(msgs: List[Dict]) -> str:
 cA, cB = st.columns([1, 1])
 with cA:
     if st.button("Unduh Transcript .md"):
-        md = to_markdownTranscript(st.session_state.messages)
+        md = to_markdown_transcript(st.session_state.messages)
         st.download_button(
             "Download",
             data=md,
