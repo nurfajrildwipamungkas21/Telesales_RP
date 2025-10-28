@@ -1,8 +1,8 @@
 # app.py
 # =============================================================================
-# Streamlit Chat — Telesales Ruangguru (Role-Play) + Gemini 2.5 Flash
-# Fixes: opener tidak auto-reply, chat user tampil instan, retry+fallback non-stream,
-# error detail jelas, avatar dibedakan, layout tidak terpotong, streaming dibatch
+# Streamlit Chat - Telesales Ruangguru (Role-Play) + Gemini 2.5 Flash
+# Optimized: cached model, batched streaming, opener tidak auto-reply,
+# avatar dibedakan, layout aman, fallback non-stream
 # =============================================================================
 import json
 import time
@@ -13,11 +13,11 @@ import streamlit as st
 import google.generativeai as genai
 
 # === A0: Page config + CSS ====================================================
-st.set_page_config(page_title="RG Telesales — Role-Play Chat", layout="wide")
+st.set_page_config(page_title="RG Telesales - Role-Play Chat", layout="wide")
 st.markdown(
     """
 <style>
-/* ruang atas cukup agar header tidak terpotong di berbagai perangkat */
+/* ruang atas cukup agar header tidak terpotong */
 .block-container {padding-top: 2.25rem; padding-bottom: 1rem; max-width: 980px;}
 /* chat bubble rapat */
 .stChatMessage {gap: .25rem;}
@@ -31,7 +31,7 @@ html, body {scroll-behavior: smooth;}
     unsafe_allow_html=True,
 )
 
-# === A1: Kunci & Model (cached) ==============================================
+# === A1: Kunci dan Model (cached) ============================================
 API_KEY = "AIzaSyDd19AHP6cciyErg-bky3u07fXVGnXaraE"
 MODEL_NAME = "models/gemini-2.5-flash"
 
@@ -42,15 +42,7 @@ def _init_model():
 
 model = _init_model()
 
-# Optional: longgar-kan safety untuk demo agar tidak sering diblok
-SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
-    {"category": "HARM_CATEGORY_SEXUAL_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
-]
-
-# === A2: Katalog (dummy) ======================================================
+# === A2: Katalog dummy ========================================================
 CATALOG = {
     "SD": [
         {"kode": "RB-SD-LIVE", "nama": "RuangBelajar Live SD", "fitur": ["Live interaktif", "Bank soal SD", "Rekaman kelas", "Kuis adaptif"], "cocok": ["kelas 4-6", "butuh latihan rutin"]},
@@ -62,7 +54,7 @@ CATALOG = {
         {"kode": "RB-SMP-PAKET", "nama": "Paket Latihan SMP", "fitur": ["Bank soal AKM", "Remedial adaptif"], "cocok": ["kelas 7-9", "butuh drilling"]}
     ],
     "SMA": [
-        {"kode": "RB-SMA-LIVE", "nama": "RuangBelajar Live SMA", "fitur": ["Live STEM & Soshum", "Jadwal intensif"], "cocok": ["kelas 10-12", "persiapan ujian sekolah"]},
+        {"kode": "RB-SMA-LIVE", "nama": "RuangBelajar Live SMA", "fitur": ["Live STEM dan Soshum", "Jadwal intensif"], "cocok": ["kelas 10-12", "persiapan ujian sekolah"]},
         {"kode": "RB-UTBK", "nama": "Paket UTBK", "fitur": ["Tryout UTBK", "Pembahasan SKD", "Strategi waktu"], "cocok": ["kelas 12", "fokus kampus tujuan"]}
     ]
 }
@@ -72,7 +64,7 @@ def build_system_prompt(audience: str, segment: str) -> str:
     return "\n".join([
         "Etik: sopan, informatif, tanpa janji palsu, tidak memaksa, tidak meminta data sensitif.",
         "Tujuan: deteksi kebutuhan belajar, jelaskan fitur relevan, tawarkan sesi lanjutan dengan persetujuan.",
-        "Gaya: ringkas, langkah-demi-langkah, pertanyaan tertutup lalu terbuka, hindari jargon.",
+        "Gaya: ringkas, langkah demi langkah, pertanyaan tertutup lalu terbuka, hindari jargon.",
         f"Peran Anda: Chatbot yang memerankan calon {audience} segmen {segment}.",
         "Larangan: jangan janji nilai, jangan minta data pembayaran, hindari SARA."
     ])
@@ -94,7 +86,7 @@ def recommend(segment: str, signals: Dict) -> List[Dict]:
 
 # === A5: Sidebar ==============================================================
 with st.sidebar:
-    st.title("RG Telesales — Role-Play")
+    st.title("RG Telesales - Role-Play")
     audience = st.selectbox("Peran lawan bicara", ["Orang Tua", "Murid"], index=0, key="aud")
     segment = st.selectbox("Segmen kelas", ["SD", "SMP", "SMA"], index=1, key="seg")
     temperature = st.slider("Creativity (temperature)", 0.0, 1.0, 0.3, 0.1, key="temp")
@@ -110,7 +102,7 @@ if "signals" not in st.session_state:
 if "suppress_next_reply" not in st.session_state:
     st.session_state.suppress_next_reply = False
 
-# === A7: Preset openers (tidak auto-reply) ===================================
+# === A7: Preset openers - tidak auto-reply ===================================
 c1, c2, c3 = st.columns(3)
 if c1.button("Opener Orang Tua"):
     st.session_state.messages.append({
@@ -131,23 +123,23 @@ if c3.button("Minta Rekomendasi"):
     })
     st.session_state.suppress_next_reply = True
 
-# === A8: Header + rekomendasi kontekstual ====================================
+# === A8: Header dan rekomendasi ==============================================
 st.markdown("## Chat Role-Play")
 sys_prompt = build_system_prompt(audience, segment)
 top_reco = recommend(segment, st.session_state.signals)
-with st.expander("Rekomendasi cepat (dinamis, non-binding)"):
+with st.expander("Rekomendasi cepat - dinamis, non-binding"):
     for r in top_reco:
-        st.write(f"{r['nama']} — fitur: {', '.join(r['fitur'])} | cocok: {', '.join(r['cocok'])}")
+        st.write(f"{r['nama']} - fitur: {', '.join(r['fitur'])} | cocok: {', '.join(r['cocok'])}")
 
-# === A9: Input pengguna (letakkan sebelum render chat) =======================
+# === A9: Input pengguna sebelum render chat ==================================
 user_input = st.chat_input("Ketik pesan Anda di sini")
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.suppress_next_reply = False
 
-# === A10: Render riwayat dengan avatar berbeda ===============================
-AVATAR_USER = "U"   # bisa diganti logo teks lain
-AVATAR_BOT  = "RG"  # avatar untuk bot
+# === A10: Render riwayat dengan avatar valid =================================
+AVATAR_USER = "👤"
+AVATAR_BOT  = "🤖"
 
 for m in st.session_state.messages[-max_history:]:
     role = "user" if m["role"] == "user" else "assistant"
@@ -171,13 +163,13 @@ def build_prompt(messages: List[Dict], sys_text: str, audience: str, segment: st
     return (
         f"[META]\n{json.dumps(meta, ensure_ascii=False)}\n\n"
         f"[SYSTEM]\n{sys_text}\n"
-        "Taktik: ringkas, mulai dengan 1-2 pertanyaan klarifikasi, akhiri opsi tindak lanjut tanpa menekan. "
+        "Taktik: ringkas, mulai dengan 1 sampai 2 pertanyaan klarifikasi, akhiri opsi tindak lanjut tanpa menekan. "
         "Batas 6 baris.\n\n"
         f"[CATALOG]\n{json.dumps(CATALOG.get(segment, []), ensure_ascii=False)}\n\n"
         f"[CONTEXT]\nPercakapan sebelumnya:\n{convo}\n\n[RESPON]"
     )
 
-# === A12: Generate — streaming batched + retry + fallback non-stream =========
+# === A12: Generate - streaming batched dengan fallback non-stream ============
 def generate_reply():
     prompt = build_prompt(st.session_state.messages, sys_prompt, audience, segment)
     cfg = genai.types.GenerationConfig(
@@ -188,12 +180,11 @@ def generate_reply():
         candidate_count=1,
     )
 
-    # 1) coba streaming
+    # streaming
     try:
         resp = model.generate_content(
             prompt,
             generation_config=cfg,
-            safety_settings=SAFETY_SETTINGS,
             stream=True,
         )
         area = st.empty()
@@ -218,23 +209,18 @@ def generate_reply():
             area.markdown(final)
         return final or " "
     except Exception as e_stream:
-        # 2) retry ringan non-stream agar tidak ngeblank
-        time.sleep(0.15)
+        # fallback non-stream
         try:
             resp2 = model.generate_content(
                 prompt,
                 generation_config=cfg,
-                safety_settings=SAFETY_SETTINGS,
                 stream=False,
             )
             return (getattr(resp2, "text", None) or "").strip() or " "
         except Exception as e_fallback:
-            # tampilkan detail error agar terlihat penyebab
-            typename1 = type(e_stream).__name__
-            typename2 = type(e_fallback).__name__
-            return f"Gagal memproses: {typename1} | {e_stream!r} || fallback: {typename2} | {e_fallback!r}"
+            return f"Gagal memproses: {type(e_stream).__name__}: {e_stream} || fallback {type(e_fallback).__name__}: {e_fallback}"
 
-# === A13: Eksekusi balasan (hanya jika bukan opener) =========================
+# === A13: Eksekusi balasan jika bukan opener =================================
 if (
     st.session_state.messages
     and st.session_state.messages[-1]["role"] == "user"
@@ -247,7 +233,7 @@ if (
 
 # === A14: Export transcript ===================================================
 def to_markdownTranscript(msgs: List[Dict]) -> str:
-    lines = ["# Transcript — RG Telesales Role-Play", ""]
+    lines = ["# Transcript - RG Telesales Role-Play", ""]
     for m in msgs:
         who = "User" if m["role"] == "user" else "Assistant"
         lines.append(f"**{who}:** {m['content']}")
@@ -267,4 +253,4 @@ with cA:
 with cB:
     st.caption("Privasi: hindari data sensitif saat role-play.")
 
-st.caption("Portfolio demo. Streaming di-batch, retry+fallback aktif, avatar dibedakan, opener tanpa auto-reply.")
+st.caption("Portfolio demo. Streaming dibatch, fallback aktif, opener tanpa auto-reply, avatar dibedakan.")
