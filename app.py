@@ -180,6 +180,11 @@ STOP_PHRASES = [
     "bisa dibantu apa",
     "ada yang bisa dibantu",
     "apa yang bisa saya bantu",
+    "bisa dihubungi",
+    "bisa di hubungi",
+    "bisa ditelepon",
+    "bisa di telepon",
+    "boleh telepon sekarang",
 ]
 
 def build_dialog_instruction(audience: str, segment: str) -> str:
@@ -189,11 +194,12 @@ def build_dialog_instruction(audience: str, segment: str) -> str:
         f"Anda tetap berperan sebagai {audience} segmen {segment}. "
         f"Patuh aturan segmen: {rule} "
         "Tanggapi sesuai konteks pesan terakhir, tidak menawarkan bantuan, tidak mempromosikan produk, "
-        "tidak menggunakan frasa layanan pelanggan. "
+        "hindari nada customer service. "
         f"Hindari frasa: {banned}. "
-        "Jika pesan pengguna berupa sapaan/cek ketersediaan (mis. 'bisa dihubungi?' atau menyapa 'Bunda Azam'), "
-        "jawab singkat sebagai pihak tersebut, konfirmasi ketersediaan, lalu boleh satu pertanyaan ringan yang relevan. "
-        "Gunakan orang pertama yang konsisten (contoh untuk Orang Tua: 'Iya, ini Bundanya Azam. Bisa dihubungi.')."
+        "Jika pesan pengguna berupa sapaan/cek identitas/kontak (mis. menyapa nama orang tua atau bertanya apakah ini nomor yang tepat), "
+        "jawab ringkas mengakui identitas saja tanpa menyatakan ketersediaan. "
+        "Lanjutkan dengan pertanyaan waktu yang netral, misalnya: 'Sekarang waktunya pas untuk bicara sebentar, atau ada waktu lain yang lebih cocok?'. "
+        "Gunakan orang pertama yang konsisten (contoh untuk Orang Tua: 'Ini Bundanya Azam.')."
     )
 
 def build_opener_instruction(audience: str, segment: str) -> str:
