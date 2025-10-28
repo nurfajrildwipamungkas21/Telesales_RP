@@ -175,7 +175,6 @@ SEG_RULES = {
     "SMA": "Boleh UTBK dan materi lanjutan; hindari topik terlalu dasar SD/SMP.",
 }
 
-# === Filter frasa yang dilarang (CS-like, perkenalan diri, dan penjadwalan) ==
 STOP_PHRASES = [
     "ada yang bisa saya bantu",
     "bagaimana saya bisa membantu",
@@ -277,34 +276,12 @@ def current_temperature() -> float:
 def history_window() -> int:
     n = len(st.session_state.get("messages", []))
     if st.session_state.get("intent") == "opener":
-        return 0  # abaikan riwayat saat pembuka agar variasi tidak terikat konteks lama
+        return 0
     if n <= 6:
         return 6
     if n <= 12:
         return 8
     return 12
-
-# === A6b: Deteksi sapaan minimal dan jawaban ringkas ==========================
-GREETING_PATTERNS = [
-    r"^\s*(halo|hai|hi|helo|hello)\s*!?\s*$",
-    r"^\s*(halo|hai|hi|helo|hello)\s+kak\b.*$",
-    r"^\s*(ass?alam(u|)alaikum)(\s+wr\.?\s*wb\.?)?\s*$",
-    r"^\s*(pagi|siang|sore|malam)\s*!?\s*$",
-]
-GREETING_REPLIES = [
-    "Halo juga, ada apa ya?",
-    "Halo, ada keperluan apa?",
-    "Halo juga, bisa disampaikan maksudnya?",
-    "Halo, ada yang ingin dibahas?",
-]
-
-def _is_minimal_greeting(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if len(t) <= 20:
-        for pat in GREETING_PATTERNS:
-            if re.match(pat, t):
-                return True
-    return False
 
 # === A7: Opener ===============================================================
 def _trigger_model_opener(target_audience: str):
@@ -334,6 +311,7 @@ sys_prompt = build_system_prompt(get_effective_audience(), segment)
 user_input = st.chat_input("Ketik pesan Anda di sini")
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
+    st.session_state.bot_persona = st.session_state.get("aud", "Orang Tua")  # sinkron persona ke pilihan terkini
     st.session_state.suppress_next_reply = False
 
 # === A10: Render riwayat (avatar dibedakan) ==================================
@@ -352,6 +330,27 @@ for m in st.session_state.messages[-h or None:]:
         st.markdown(m["content"])
 
 # === A11: Prompt composer =====================================================
+GREETING_PATTERNS = [
+    r"^\s*(halo|hai|hi|helo|hello)\s*!?\s*$",
+    r"^\s*(halo|hai|hi|helo|hello)\s+kak\b.*$",
+    r"^\s*(ass?alam(u|)alaikum)(\s+wr\.?\s*wb\.?)?\s*$",
+    r"^\s*(pagi|siang|sore|malam)\s*!?\s*$",
+]
+GREETING_REPLIES = [
+    "Halo juga, ada apa ya?",
+    "Halo, ada keperluan apa?",
+    "Halo juga, bisa disampaikan maksudnya?",
+    "Halo, ada yang ingin dibahas?",
+]
+
+def _is_minimal_greeting(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if len(t) <= 20:
+        for pat in GREETING_PATTERNS:
+            if re.match(pat, t):
+                return True
+    return False
+
 def build_prompt(messages: List[Dict], audience: str, segment: str, opener: bool = False) -> str:
     meta = {
         "audience": audience,
