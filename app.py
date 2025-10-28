@@ -176,10 +176,7 @@ if c3.button("Minta Rekomendasi"):
 # === A8: Header + rekomendasi cepat (UI informatif) ==========================
 st.markdown("## Chat Role-Play")
 sys_prompt = build_system_prompt(get_effective_audience(), segment)
-top_reco = recommend(segment, st.session_state.signals)
-with st.expander("Rekomendasi cepat - ringkas (UI saja)"):
-    for r in top_reco:
-        st.write(f"{r['nama']} • fitur: {', '.join(r['fitur'])} • cocok: {', '.join(r['cocok'])}")
+# Rekomendasi cepat dinonaktifkan
 
 # === A9: Input sebelum render chat ===========================================
 user_input = st.chat_input("Ketik pesan Anda di sini")
