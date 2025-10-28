@@ -1,9 +1,9 @@
 # app.py
 # =============================================================================
 # Streamlit Chat — Telesales Ruangguru (Role-Play) + Gemini 2.5 Flash
-# Optimized: batched streaming, cached model, lighter UI, opener tidak auto-reply
+# Optimized: cached model, batched streaming, opener tidak auto-reply,
+# urutan render diperbaiki agar chat user langsung tampil, perbaikan layout
 # =============================================================================
-import os
 import json
 import time
 from datetime import datetime
@@ -12,18 +12,24 @@ from typing import List, Dict
 import streamlit as st
 import google.generativeai as genai
 
-# === A0: Page config + CSS ringan ============================================
+# === A0: Page config + CSS ====================================================
 st.set_page_config(page_title="RG Telesales — Role-Play Chat", layout="wide")
-st.markdown("""
+st.markdown(
+    """
 <style>
-.block-container {padding-top: 1rem; padding-bottom: 1rem; max-width: 980px;}
+/* Ruang atas agar header tidak terpotong di berbagai perangkat */
+.block-container {padding-top: 2.25rem; padding-bottom: 1rem; max-width: 980px;}
+/* Chat bubble rapat dan stabil */
 .stChatMessage {gap: .25rem;}
+/* Scroll halus untuk mobile/iOS */
 html, body {scroll-behavior: smooth;}
 @media (max-width: 600px){
   .block-container {padding-left: .6rem; padding-right: .6rem;}
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # === A1: Kunci & Model (cached) ==============================================
 API_KEY = "AIzaSyDd19AHP6cciyErg-bky3u07fXVGnXaraE"
@@ -78,7 +84,7 @@ def recommend(segment: str, signals: Dict) -> List[Dict]:
     hasil.sort(key=lambda x: x["skor"], reverse=True)
     return hasil[:3]
 
-# === A5: Sidebar (stabil) =====================================================
+# === A5: Sidebar ==============================================================
 with st.sidebar:
     st.title("RG Telesales — Role-Play")
     audience = st.selectbox("Peran lawan bicara", ["Orang Tua", "Murid"], index=0, key="aud")
@@ -94,9 +100,9 @@ if "messages" not in st.session_state:
 if "signals" not in st.session_state:
     st.session_state.signals = {"fokus_ujian": False, "butuh_live": False, "butuh_latihan": True, "konsep_dasar": False}
 if "suppress_next_reply" not in st.session_state:
-    st.session_state.suppress_next_reply = False  # cegah auto-reply setelah opener
+    st.session_state.suppress_next_reply = False
 
-# === A7: Preset openers (tidak memicu balasan) ===============================
+# === A7: Preset openers (tidak auto-reply) ===================================
 c1, c2, c3 = st.columns(3)
 if c1.button("Opener Orang Tua"):
     st.session_state.messages.append({
@@ -120,52 +126,51 @@ if c3.button("Minta Rekomendasi"):
 # === A8: Header + rekomendasi kontekstual ====================================
 st.markdown("## Chat Role-Play")
 sys_prompt = build_system_prompt(audience, segment)
-
 top_reco = recommend(segment, st.session_state.signals)
 with st.expander("Rekomendasi cepat (dinamis, non-binding)"):
     for r in top_reco:
-        st.write(f"• {r['nama']} — fitur: {', '.join(r['fitur'])} | cocok: {', '.join(r['cocok'])}")
+        st.write(f"{r['nama']} — fitur: {', '.join(r['fitur'])} | cocok: {', '.join(r['cocok'])}")
 
-# === A9: Render riwayat =======================================================
+# === A9: Input pengguna (harus sebelum render chat agar langsung muncul) =====
+user_input = st.chat_input("Ketik pesan Anda di sini")
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    st.session_state.suppress_next_reply = False
+
+# === A10: Render riwayat ======================================================
 for m in st.session_state.messages[-max_history:]:
     with st.chat_message("user" if m["role"] == "user" else "assistant"):
         st.markdown(m["content"])
 
-# === A10: Input pengguna ======================================================
-user_input = st.chat_input("Ketik pesan Anda di sini")
-if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    st.session_state.suppress_next_reply = False  # hanya balas setelah input manual
-
-# === A11: Build parts =========================================================
-def build_parts(messages: List[Dict], sys_text: str, audience: str, segment: str) -> List[Dict]:
+# === A11: Prompt composer (gabung string untuk stabilitas API) ===============
+def build_prompt(messages: List[Dict], sys_text: str, audience: str, segment: str) -> str:
     meta = {
         "audience": audience,
         "segment": segment,
         "time": datetime.now().isoformat(timespec="seconds"),
         "policy": {"no_fake_promises": True, "no_sensitive_data": True, "no_payment_request": True},
     }
-    instruksi = (f"{sys_text}\n"
-                 "Taktik: ringkas, mulai dengan 1-2 pertanyaan klarifikasi, akhiri opsi tindak lanjut tanpa menekan. "
-                 "Batas 6 baris.")
-    history_text = []
+    history_lines = []
     for m in messages[-max_history:]:
         role = "User" if m["role"] == "user" else "Assistant"
-        history_text.append(f"{role}: {m['content']}")
-    convo = "\n".join(history_text)
-    return [
-        {"text": f"[META]\n{json.dumps(meta, ensure_ascii=False)}"},
-        {"text": f"[SYSTEM]\n{instruksi}"},
-        {"text": f"[CATALOG]\n{json.dumps(CATALOG.get(segment, []), ensure_ascii=False)}"},
-        {"text": f"[CONTEXT]\nPercakapan sebelumnya:\n{convo}\n[RESPON]"},
-    ]
+        history_lines.append(f"{role}: {m['content']}")
+    convo = "\n".join(history_lines)
+    prompt = (
+        f"[META]\n{json.dumps(meta, ensure_ascii=False)}\n\n"
+        f"[SYSTEM]\n{sys_text}\n"
+        "Taktik: ringkas, mulai dengan 1-2 pertanyaan klarifikasi, akhiri opsi tindak lanjut tanpa menekan. "
+        "Batas 6 baris.\n\n"
+        f"[CATALOG]\n{json.dumps(CATALOG.get(segment, []), ensure_ascii=False)}\n\n"
+        f"[CONTEXT]\nPercakapan sebelumnya:\n{convo}\n\n[RESPON]"
+    )
+    return prompt
 
-# === A12: Panggil model — batched streaming tanpa sleep ======================
+# === A12: Generate — batched streaming, error robust =========================
 def generate_reply():
-    parts = build_parts(st.session_state.messages, sys_prompt, audience, segment)
+    prompt = build_prompt(st.session_state.messages, sys_prompt, audience, segment)
     try:
         resp = model.generate_content(
-            parts,
+            prompt,
             generation_config=genai.types.GenerationConfig(
                 temperature=float(temperature),
                 top_p=0.9,
@@ -173,35 +178,36 @@ def generate_reply():
                 max_output_tokens=256,
                 candidate_count=1,
             ),
-            stream=True
+            stream=True,
         )
         area = st.empty()
-        acc = []
+        buffer = []
         last_push = time.perf_counter()
         BATCH_CHARS = 120
         MIN_INTERVAL = 0.03
         pending = 0
 
-        for ev in resp:
-            chunk = getattr(ev, "text", None)
-            if not chunk: 
+        for event in resp:
+            chunk = getattr(event, "text", None)
+            if not chunk:
                 continue
-            acc.append(chunk)
+            buffer.append(chunk)
             pending += len(chunk)
             now = time.perf_counter()
             if pending >= BATCH_CHARS or (now - last_push) >= MIN_INTERVAL:
-                area.markdown("".join(acc))
+                area.markdown("".join(buffer))
                 pending = 0
                 last_push = now
 
-        final_text = "".join(acc).strip()
+        final_text = "".join(buffer).strip()
         if final_text:
             area.markdown(final_text)
         return final_text or " "
     except Exception as e:
+        st.warning(f"Gagal memproses: {e}")
         return f"Gagal memproses: {e}"
 
-# === A13: Eksekusi bila ada pesan user dan tidak disuppress ==================
+# === A13: Eksekusi balasan (hanya jika bukan opener) =========================
 if (
     st.session_state.messages
     and st.session_state.messages[-1]["role"] == "user"
@@ -219,11 +225,17 @@ def to_markdownTranscript(msgs: List[Dict]) -> str:
         lines.append(f"**{who}:** {m['content']}")
     return "\n\n".join(lines)
 
-cA, cB = st.columns([1,1])
+cA, cB = st.columns([1, 1])
 with cA:
     if st.button("Unduh Transcript .md"):
         md = to_markdownTranscript(st.session_state.messages)
-        st.download_button("Download", data=md, file_name="transcript_rg_telesales.md", mime="text/markdown", use_container_width=True)
+        st.download_button(
+            "Download",
+            data=md,
+            file_name="transcript_rg_telesales.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
 with cB:
     st.caption("Privasi: hindari data sensitif saat role-play.")
 
