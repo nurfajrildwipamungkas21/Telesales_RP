@@ -2,9 +2,8 @@
 # =============================================================================
 # Streamlit Chat - Telesales Ruangguru (Role-Play)
 # Kompatibel SDK baru (google-genai) dan SDK lama (google.generativeai)
-# Perbaikan: persona = Orang Tua/Murid (bukan sales), opener oleh assistant,
-# avatar dibedakan, hilangkan duplikasi render, prompt anti-pitching,
-# hindari overwrite key widget via bot_persona.
+# Persona = Orang Tua/Murid (non-sales), opener oleh assistant, avatar dibedakan,
+# tanpa overwrite key widget, tanpa duplikasi render
 # =============================================================================
 import os
 import json
@@ -96,7 +95,6 @@ CATALOG = {
 
 # === A5: Prompt untuk persona non-sales ======================================
 def build_system_prompt(audience: str, segment: str) -> str:
-    # Persona ketat: assistant = Orang Tua/Murid. Dilarang menjual/menyebut produk.
     return "\n".join([
         f"Peran: Anda {audience} segmen {segment}.",
         "Tujuan: sampaikan masalah, konteks, harapan, dan batasan secara natural dari sudut pandang Anda.",
@@ -107,7 +105,6 @@ def build_system_prompt(audience: str, segment: str) -> str:
     ])
 
 def build_opener_instruction(audience: str, segment: str) -> str:
-    # Instruksi eksplisit untuk menghasilkan pembuka yang bervariasi
     return (
         f"Buat pembuka percakapan 1–2 kalimat sebagai {audience} segmen {segment}. "
         "Nyatakan keluhan atau tujuan spesifik secara natural. "
@@ -155,15 +152,13 @@ if "internal_triggers" not in st.session_state:
 if "bot_persona" not in st.session_state:
     st.session_state.bot_persona = audience
 
-# persona efektif untuk bot, terpisah dari widget selectbox
-effective_audience = st.session_state.get("bot_persona", audience)
+def get_effective_audience() -> str:
+    return st.session_state.get("bot_persona", st.session_state.get("aud", "Orang Tua"))
 
 # === A7: Opener ===============================================================
 def _trigger_model_opener(target_audience: str):
-    # set persona bot tanpa menyentuh key widget 'aud'
     st.session_state.bot_persona = target_audience
     st.session_state.intent = "opener"
-    # tambahkan ping sintetis agar A17 memicu generate_reply tanpa tampil di UI
     ping = "⏩ OPENER"
     st.session_state.messages.append({"role": "user", "content": ping})
     st.session_state.internal_triggers.append(ping)
@@ -180,7 +175,7 @@ if c3.button("Minta Rekomendasi"):
 
 # === A8: Header + rekomendasi cepat (UI informatif) ==========================
 st.markdown("## Chat Role-Play")
-sys_prompt = build_system_prompt(effective_audience, segment)
+sys_prompt = build_system_prompt(get_effective_audience(), segment)
 top_reco = recommend(segment, st.session_state.signals)
 with st.expander("Rekomendasi cepat - ringkas (UI saja)"):
     for r in top_reco:
@@ -200,10 +195,9 @@ def _bot_avatar(aud: str) -> str:
 
 for m in st.session_state.messages[-max_history:]:
     if m["content"] in st.session_state.internal_triggers:
-        # sembunyikan ping sintetis dari UI
         continue
     role = "user" if m["role"] == "user" else "assistant"
-    avatar = AVATAR_USER if role == "user" else _bot_avatar(effective_audience)
+    avatar = AVATAR_USER if role == "user" else _bot_avatar(get_effective_audience())
     with st.chat_message(role, avatar=avatar):
         st.markdown(m["content"])
 
@@ -213,13 +207,9 @@ def build_prompt(messages: List[Dict], audience: str, segment: str, opener: bool
         "audience": audience,
         "segment": segment,
         "time": datetime.now().isoformat(timespec="seconds"),
-        "policy": {
-            "no_pitch": True,
-            "no_product_names": True,
-            "focus_persona": True,
-        },
+        "policy": {"no_pitch": True, "no_product_names": True, "focus_persona": True},
         "mode": "opener" if opener else "dialog",
-        "nonce": int(time.time() * 1000)
+        "nonce": int(time.time() * 1000),
     }
     history_lines = []
     for m in messages[-max_history:]:
@@ -324,11 +314,10 @@ def _build_config_new(sys_text: str):
 # === A16: Generator abstrak ===================================================
 def generate_reply() -> str:
     opener_mode = st.session_state.intent == "opener"
-    prompt = build_prompt(st.session_state.messages, effective_audience, segment, opener=opener_mode)
+    prompt = build_prompt(st.session_state.messages, get_effective_audience(), segment, opener=opener_mode)
 
     if SDK == "new":
         cfg = _build_config_new(sys_prompt)
-        # 1) streaming
         for model_name in MODEL_FALLBACKS:
             try:
                 stream = client.models.generate_content_stream(
@@ -359,7 +348,6 @@ def generate_reply() -> str:
                     return final
             except Exception:
                 continue
-        # 2) non-stream
         last_reason = ""
         for model_name in MODEL_FALLBACKS:
             try:
@@ -380,9 +368,7 @@ def generate_reply() -> str:
                 last_reason = f"{type(e).__name__}: {e}"
         return f"Model tidak mengembalikan teks. {last_reason or 'Coba ganti model/parameter.'}"
 
-    # SDK lama
     safety_kw = _safety_kwargs_legacy()
-    # streaming
     for model_name in MODEL_FALLBACKS:
         try:
             model = genai_legacy.GenerativeModel(model_name=model_name, **safety_kw)
@@ -410,7 +396,6 @@ def generate_reply() -> str:
                 return final
         except Exception:
             continue
-    # non-stream
     last_reason = ""
     for model_name in MODEL_FALLBACKS:
         try:
@@ -434,10 +419,9 @@ if (
     and st.session_state.messages[-1]["role"] == "user"
     and not st.session_state.suppress_next_reply
 ):
-    with st.chat_message("assistant", avatar=_bot_avatar(effective_audience)):
+    with st.chat_message("assistant", avatar=_bot_avatar(get_effective_audience())):
         reply = generate_reply()
         st.session_state.messages.append({"role": "assistant", "content": reply})
-    # reset intent setelah opener dipicu
     if st.session_state.intent == "opener":
         st.session_state.intent = None
 
