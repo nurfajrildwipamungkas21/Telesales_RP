@@ -1,7 +1,7 @@
 # app.py
 # =============================================================================
 # Streamlit Chat — Telesales Ruangguru (Role-Play) + Gemini 2.5 Flash
-# Optimized: batched streaming, cached model, lighter UI
+# Optimized: batched streaming, cached model, lighter UI, opener tidak auto-reply
 # =============================================================================
 import os
 import json
@@ -16,11 +16,8 @@ import google.generativeai as genai
 st.set_page_config(page_title="RG Telesales — Role-Play Chat", layout="wide")
 st.markdown("""
 <style>
-/* Kurangi padding global dan perketat gap komponen */
 .block-container {padding-top: 1rem; padding-bottom: 1rem; max-width: 980px;}
-/* Chat bubble lebih rapat */
 .stChatMessage {gap: .25rem;}
-/* Scroll halus mobile/iOS */
 html, body {scroll-behavior: smooth;}
 @media (max-width: 600px){
   .block-container {padding-left: .6rem; padding-right: .6rem;}
@@ -87,23 +84,38 @@ with st.sidebar:
     audience = st.selectbox("Peran lawan bicara", ["Orang Tua", "Murid"], index=0, key="aud")
     segment = st.selectbox("Segmen kelas", ["SD", "SMP", "SMA"], index=1, key="seg")
     temperature = st.slider("Creativity (temperature)", 0.0, 1.0, 0.3, 0.1, key="temp")
-    max_history = st.slider("Batas riwayat pesan", 4, 32, 8, 2, key="hist")  # default lebih kecil = lebih cepat
+    max_history = st.slider("Batas riwayat pesan", 4, 32, 8, 2, key="hist")
     st.caption(f"Model: {MODEL_NAME}")
     st.caption("Kunci demo tertanam untuk portfolio")
 
 # === A6: Session state ========================================================
-if "messages" not in st.session_state: st.session_state.messages = []
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 if "signals" not in st.session_state:
     st.session_state.signals = {"fokus_ujian": False, "butuh_live": False, "butuh_latihan": True, "konsep_dasar": False}
+if "suppress_next_reply" not in st.session_state:
+    st.session_state.suppress_next_reply = False  # cegah auto-reply setelah opener
 
-# === A7: Preset openers ======================================================
+# === A7: Preset openers (tidak memicu balasan) ===============================
 c1, c2, c3 = st.columns(3)
 if c1.button("Opener Orang Tua"):
-    st.session_state.messages.append({"role": "user", "content": "Halo, saya orang tua. Anak saya sering bingung saat latihan matematika dan nilainya turun."})
+    st.session_state.messages.append({
+        "role": "user",
+        "content": "Halo, saya orang tua. Anak saya sering bingung saat latihan matematika dan nilainya turun."
+    })
+    st.session_state.suppress_next_reply = True
 if c2.button("Opener Murid"):
-    st.session_state.messages.append({"role": "user", "content": "Kak, aku kelas 9. Aku pengin naik nilai IPA, tapi suka keteteran di fisika."})
+    st.session_state.messages.append({
+        "role": "user",
+        "content": "Kak, aku kelas 9. Aku pengin naik nilai IPA, tapi suka keteteran di fisika."
+    })
+    st.session_state.suppress_next_reply = True
 if c3.button("Minta Rekomendasi"):
-    st.session_state.messages.append({"role": "user", "content": "Bisa kasih rekomendasi paket belajar yang cocok dengan kebutuhan saya?"})
+    st.session_state.messages.append({
+        "role": "user",
+        "content": "Bisa kasih rekomendasi paket belajar yang cocok dengan kebutuhan saya?"
+    })
+    st.session_state.suppress_next_reply = True
 
 # === A8: Header + rekomendasi kontekstual ====================================
 st.markdown("## Chat Role-Play")
@@ -123,6 +135,7 @@ for m in st.session_state.messages[-max_history:]:
 user_input = st.chat_input("Ketik pesan Anda di sini")
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
+    st.session_state.suppress_next_reply = False  # hanya balas setelah input manual
 
 # === A11: Build parts =========================================================
 def build_parts(messages: List[Dict], sys_text: str, audience: str, segment: str) -> List[Dict]:
@@ -165,13 +178,14 @@ def generate_reply():
         area = st.empty()
         acc = []
         last_push = time.perf_counter()
-        BATCH_CHARS = 120          # update UI per ±120 char
-        MIN_INTERVAL = 0.03        # atau min 30 ms
+        BATCH_CHARS = 120
+        MIN_INTERVAL = 0.03
         pending = 0
 
         for ev in resp:
             chunk = getattr(ev, "text", None)
-            if not chunk: continue
+            if not chunk: 
+                continue
             acc.append(chunk)
             pending += len(chunk)
             now = time.perf_counter()
@@ -187,8 +201,12 @@ def generate_reply():
     except Exception as e:
         return f"Gagal memproses: {e}"
 
-# === A13: Eksekusi bila ada pesan user =======================================
-if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+# === A13: Eksekusi bila ada pesan user dan tidak disuppress ==================
+if (
+    st.session_state.messages
+    and st.session_state.messages[-1]["role"] == "user"
+    and not st.session_state.suppress_next_reply
+):
     with st.chat_message("assistant"):
         reply = generate_reply()
         st.session_state.messages.append({"role": "assistant", "content": reply})
@@ -209,4 +227,4 @@ with cA:
 with cB:
     st.caption("Privasi: hindari data sensitif saat role-play.")
 
-st.caption("Portfolio demo. Optimized streaming dan UI ringan.")
+st.caption("Portfolio demo. Optimized streaming, UI ringan, opener tanpa auto-reply.")
