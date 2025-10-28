@@ -174,6 +174,7 @@ SEG_RULES = {
     "SMA": "Boleh UTBK dan materi lanjutan; hindari topik terlalu dasar SD/SMP.",
 }
 
+# === Perubahan: cegah jawaban berjenis 'bisa dihubungi' dan pertanyaan waktu ==
 STOP_PHRASES = [
     "ada yang bisa saya bantu",
     "bagaimana saya bisa membantu",
@@ -185,6 +186,14 @@ STOP_PHRASES = [
     "bisa ditelepon",
     "bisa di telepon",
     "boleh telepon sekarang",
+    "sekarang waktunya pas",
+    "sekarang waktu yang pas",
+    "waktunya pas",
+    "ada waktu lain",
+    "jadwal yang cocok",
+    "kapan waktu yang tepat",
+    "diskusi sebentar atau nanti",
+    "apakah sekarang waktu",
 ]
 
 def build_dialog_instruction(audience: str, segment: str) -> str:
@@ -193,13 +202,12 @@ def build_dialog_instruction(audience: str, segment: str) -> str:
     return (
         f"Anda tetap berperan sebagai {audience} segmen {segment}. "
         f"Patuh aturan segmen: {rule} "
-        "Tanggapi sesuai konteks pesan terakhir, tidak menawarkan bantuan, tidak mempromosikan produk, "
-        "hindari nada customer service. "
+        "Tanggapi ketat sesuai konteks pesan terakhir. Tidak menawarkan bantuan. Tidak promosi produk. "
+        "Tidak menyebut ketersediaan, tidak menanyakan waktu/jadwal, tidak bernada customer service. "
         f"Hindari frasa: {banned}. "
-        "Jika pesan pengguna berupa sapaan/cek identitas/kontak (mis. menyapa nama orang tua atau bertanya apakah ini nomor yang tepat), "
-        "jawab ringkas mengakui identitas saja tanpa menyatakan ketersediaan. "
-        "Lanjutkan dengan pertanyaan waktu yang netral, misalnya: 'Sekarang waktunya pas untuk bicara sebentar, atau ada waktu lain yang lebih cocok?'. "
-        "Gunakan orang pertama yang konsisten (contoh untuk Orang Tua: 'Ini Bundanya Azam.')."
+        "Jika pesan pengguna adalah sapaan/cek identitas/kontak, akui identitas singkat saja dan lanjutkan dengan satu pertanyaan isi yang netral, "
+        "contoh: 'Ini Bundanya Azam. Ada apa ya?'. "
+        "Gunakan orang pertama konsisten sesuai persona."
     )
 
 def build_opener_instruction(audience: str, segment: str) -> str:
@@ -263,7 +271,7 @@ def current_temperature() -> float:
 def history_window() -> int:
     n = len(st.session_state.get("messages", []))
     if st.session_state.get("intent") == "opener":
-        return 0  # abaikan riwayat saat pembuka agar variasi tidak terikat konteks lama
+        return 0
     if n <= 6:
         return 6
     if n <= 12:
