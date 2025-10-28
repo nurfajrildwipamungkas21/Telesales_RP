@@ -135,8 +135,6 @@ with st.sidebar:
     st.title("RG Telesales - Role-Play")
     audience = st.selectbox("Peran lawan bicara", ["Orang Tua", "Murid"], index=0, key="aud")
     segment = st.selectbox("Segmen kelas", ["SD", "SMP", "SMA"], index=1, key="seg")
-    temperature = st.slider("Creativity (temperature)", 0.0, 1.0, 0.3, 0.1, key="temp")
-    max_history = st.slider("Batas riwayat pesan", 4, 32, 8, 2, key="hist")
     st.caption(f"SDK: {SDK} | Model: {MODEL_PRIMARY}")
 
 if "messages" not in st.session_state:
@@ -154,6 +152,20 @@ if "bot_persona" not in st.session_state:
 
 def get_effective_audience() -> str:
     return st.session_state.get("bot_persona", st.session_state.get("aud", "Orang Tua"))
+
+# Auto tuning (tanpa kontrol UI)
+def current_temperature() -> float:
+    return 0.2 if st.session_state.get("intent") == "opener" else 0.3
+
+def history_window() -> int:
+    n = len(st.session_state.get("messages", []))
+    if st.session_state.get("intent") == "opener":
+        return 4
+    if n <= 6:
+        return 6
+    if n <= 12:
+        return 8
+    return 12
 
 # === A7: Opener ===============================================================
 def _trigger_model_opener(target_audience: str):
@@ -190,7 +202,8 @@ AVATAR_USER = "🧑"
 def _bot_avatar(aud: str) -> str:
     return "🧑‍🦳" if aud == "Orang Tua" else "🧑‍🎓"
 
-for m in st.session_state.messages[-max_history:]:
+h = history_window()
+for m in st.session_state.messages[-h:]:
     if m["content"] in st.session_state.internal_triggers:
         continue
     role = "user" if m["role"] == "user" else "assistant"
@@ -209,7 +222,8 @@ def build_prompt(messages: List[Dict], audience: str, segment: str, opener: bool
         "nonce": int(time.time() * 1000),
     }
     history_lines = []
-    for m in messages[-max_history:]:
+    limit = history_window()
+    for m in messages[-limit:]:
         if m["content"] in st.session_state.internal_triggers:
             continue
         role = "User" if m["role"] == "user" else "Assistant"
@@ -300,7 +314,7 @@ def _extract_text_from_stream_event(event) -> Optional[str]:
 def _build_config_new(sys_text: str):
     return types_new.GenerateContentConfig(
         system_instruction=sys_text,
-        temperature=float(temperature),
+        temperature=float(current_temperature()),
         top_p=0.9,
         top_k=40,
         max_output_tokens=256,
