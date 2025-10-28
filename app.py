@@ -1,8 +1,8 @@
 # app.py
 # =============================================================================
 # Streamlit Chat — Telesales Ruangguru (Role-Play) + Gemini 2.5 Flash
-# Optimized: cached model, batched streaming, opener tidak auto-reply,
-# urutan render diperbaiki agar chat user langsung tampil, perbaikan layout
+# Fixes: opener tidak auto-reply, chat user tampil instan, retry+fallback non-stream,
+# error detail jelas, avatar dibedakan, layout tidak terpotong, streaming dibatch
 # =============================================================================
 import json
 import time
@@ -17,11 +17,11 @@ st.set_page_config(page_title="RG Telesales — Role-Play Chat", layout="wide")
 st.markdown(
     """
 <style>
-/* Ruang atas agar header tidak terpotong di berbagai perangkat */
+/* ruang atas cukup agar header tidak terpotong di berbagai perangkat */
 .block-container {padding-top: 2.25rem; padding-bottom: 1rem; max-width: 980px;}
-/* Chat bubble rapat dan stabil */
+/* chat bubble rapat */
 .stChatMessage {gap: .25rem;}
-/* Scroll halus untuk mobile/iOS */
+/* scroll halus */
 html, body {scroll-behavior: smooth;}
 @media (max-width: 600px){
   .block-container {padding-left: .6rem; padding-right: .6rem;}
@@ -41,6 +41,14 @@ def _init_model():
     return genai.GenerativeModel(model_name=MODEL_NAME)
 
 model = _init_model()
+
+# Optional: longgar-kan safety untuk demo agar tidak sering diblok
+SAFETY_SETTINGS = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+    {"category": "HARM_CATEGORY_SEXUAL_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+]
 
 # === A2: Katalog (dummy) ======================================================
 CATALOG = {
@@ -131,18 +139,23 @@ with st.expander("Rekomendasi cepat (dinamis, non-binding)"):
     for r in top_reco:
         st.write(f"{r['nama']} — fitur: {', '.join(r['fitur'])} | cocok: {', '.join(r['cocok'])}")
 
-# === A9: Input pengguna (harus sebelum render chat agar langsung muncul) =====
+# === A9: Input pengguna (letakkan sebelum render chat) =======================
 user_input = st.chat_input("Ketik pesan Anda di sini")
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.suppress_next_reply = False
 
-# === A10: Render riwayat ======================================================
+# === A10: Render riwayat dengan avatar berbeda ===============================
+AVATAR_USER = "U"   # bisa diganti logo teks lain
+AVATAR_BOT  = "RG"  # avatar untuk bot
+
 for m in st.session_state.messages[-max_history:]:
-    with st.chat_message("user" if m["role"] == "user" else "assistant"):
+    role = "user" if m["role"] == "user" else "assistant"
+    avatar = AVATAR_USER if role == "user" else AVATAR_BOT
+    with st.chat_message(role, avatar=avatar):
         st.markdown(m["content"])
 
-# === A11: Prompt composer (gabung string untuk stabilitas API) ===============
+# === A11: Prompt composer =====================================================
 def build_prompt(messages: List[Dict], sys_text: str, audience: str, segment: str) -> str:
     meta = {
         "audience": audience,
@@ -155,7 +168,7 @@ def build_prompt(messages: List[Dict], sys_text: str, audience: str, segment: st
         role = "User" if m["role"] == "user" else "Assistant"
         history_lines.append(f"{role}: {m['content']}")
     convo = "\n".join(history_lines)
-    prompt = (
+    return (
         f"[META]\n{json.dumps(meta, ensure_ascii=False)}\n\n"
         f"[SYSTEM]\n{sys_text}\n"
         "Taktik: ringkas, mulai dengan 1-2 pertanyaan klarifikasi, akhiri opsi tindak lanjut tanpa menekan. "
@@ -163,49 +176,63 @@ def build_prompt(messages: List[Dict], sys_text: str, audience: str, segment: st
         f"[CATALOG]\n{json.dumps(CATALOG.get(segment, []), ensure_ascii=False)}\n\n"
         f"[CONTEXT]\nPercakapan sebelumnya:\n{convo}\n\n[RESPON]"
     )
-    return prompt
 
-# === A12: Generate — batched streaming, error robust =========================
+# === A12: Generate — streaming batched + retry + fallback non-stream =========
 def generate_reply():
     prompt = build_prompt(st.session_state.messages, sys_prompt, audience, segment)
+    cfg = genai.types.GenerationConfig(
+        temperature=float(temperature),
+        top_p=0.9,
+        top_k=40,
+        max_output_tokens=256,
+        candidate_count=1,
+    )
+
+    # 1) coba streaming
     try:
         resp = model.generate_content(
             prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=float(temperature),
-                top_p=0.9,
-                top_k=40,
-                max_output_tokens=256,
-                candidate_count=1,
-            ),
+            generation_config=cfg,
+            safety_settings=SAFETY_SETTINGS,
             stream=True,
         )
         area = st.empty()
-        buffer = []
-        last_push = time.perf_counter()
+        buf = []
+        last = time.perf_counter()
         BATCH_CHARS = 120
         MIN_INTERVAL = 0.03
         pending = 0
-
         for event in resp:
             chunk = getattr(event, "text", None)
             if not chunk:
                 continue
-            buffer.append(chunk)
+            buf.append(chunk)
             pending += len(chunk)
             now = time.perf_counter()
-            if pending >= BATCH_CHARS or (now - last_push) >= MIN_INTERVAL:
-                area.markdown("".join(buffer))
+            if pending >= BATCH_CHARS or (now - last) >= MIN_INTERVAL:
+                area.markdown("".join(buf))
                 pending = 0
-                last_push = now
-
-        final_text = "".join(buffer).strip()
-        if final_text:
-            area.markdown(final_text)
-        return final_text or " "
-    except Exception as e:
-        st.warning(f"Gagal memproses: {e}")
-        return f"Gagal memproses: {e}"
+                last = now
+        final = "".join(buf).strip()
+        if final:
+            area.markdown(final)
+        return final or " "
+    except Exception as e_stream:
+        # 2) retry ringan non-stream agar tidak ngeblank
+        time.sleep(0.15)
+        try:
+            resp2 = model.generate_content(
+                prompt,
+                generation_config=cfg,
+                safety_settings=SAFETY_SETTINGS,
+                stream=False,
+            )
+            return (getattr(resp2, "text", None) or "").strip() or " "
+        except Exception as e_fallback:
+            # tampilkan detail error agar terlihat penyebab
+            typename1 = type(e_stream).__name__
+            typename2 = type(e_fallback).__name__
+            return f"Gagal memproses: {typename1} | {e_stream!r} || fallback: {typename2} | {e_fallback!r}"
 
 # === A13: Eksekusi balasan (hanya jika bukan opener) =========================
 if (
@@ -213,9 +240,10 @@ if (
     and st.session_state.messages[-1]["role"] == "user"
     and not st.session_state.suppress_next_reply
 ):
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar=AVATAR_BOT):
         reply = generate_reply()
         st.session_state.messages.append({"role": "assistant", "content": reply})
+        st.markdown(reply)
 
 # === A14: Export transcript ===================================================
 def to_markdownTranscript(msgs: List[Dict]) -> str:
@@ -239,4 +267,4 @@ with cA:
 with cB:
     st.caption("Privasi: hindari data sensitif saat role-play.")
 
-st.caption("Portfolio demo. Optimized streaming, UI ringan, opener tanpa auto-reply.")
+st.caption("Portfolio demo. Streaming di-batch, retry+fallback aktif, avatar dibedakan, opener tanpa auto-reply.")
