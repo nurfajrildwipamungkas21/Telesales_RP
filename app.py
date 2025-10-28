@@ -39,29 +39,44 @@ except Exception:
     import google.generativeai as genai_legacy
     types_new = None  # tidak dipakai di jalur legacy
 
-API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+# === A2: API key resolver =====================================================
+DEMO_API_KEY = "AIzaSyCi19OsrR1lsoN7qs2EU5U4zP-8j_1eHh4"
+
+def _resolve_api_key() -> str:
+    try:
+        for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GENAI_API_KEY"):
+            if k in st.secrets and str(st.secrets[k]).strip():
+                return str(st.secrets[k]).strip()
+    except Exception:
+        pass
+    for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GENAI_API_KEY"):
+        v = os.getenv(k)
+        if v and v.strip():
+            return v.strip()
+    return DEMO_API_KEY
+
+API_KEY = _resolve_api_key()
+
+# Model names tanpa prefix "models/" untuk kompatibilitas lintas SDK
 MODEL_PRIMARY = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 MODEL_FALLBACKS = [MODEL_PRIMARY, "gemini-2.0-flash", "gemini-1.5-flash"]
 
-# === A2: Client/Model init ====================================================
+# === A3: Client/Model init ====================================================
 @st.cache_resource(show_spinner=False)
 def _init_client_or_none():
     if SDK == "new":
-        # google-genai Client membaca env key otomatis, namun kita set eksplisit bila ada
-        if API_KEY:
-            return genai_new.Client(api_key=API_KEY)
-        return genai_new.Client()
+        if not API_KEY:
+            raise RuntimeError("GOOGLE_API_KEY tidak ditemukan di st.secrets atau environment.")
+        return genai_new.Client(api_key=API_KEY)
     else:
-        # SDK lama: konfigurasi global
-        if API_KEY:
-            genai_legacy.configure(api_key=API_KEY)
-        else:
-            genai_legacy.configure()
+        if not API_KEY:
+            raise RuntimeError("API key tidak ditemukan untuk SDK lama (google.generativeai).")
+        genai_legacy.configure(api_key=API_KEY)
         return None  # jalur legacy tidak memakai objek client
 
 client = _init_client_or_none()
 
-# === A3: Data katalog =========================================================
+# === A4: Data katalog =========================================================
 CATALOG = {
     "SD": [
         {"kode": "RB-SD-LIVE", "nama": "RuangBelajar Live SD", "fitur": ["Live interaktif", "Bank soal SD", "Rekaman kelas", "Kuis adaptif"], "cocok": ["kelas 4-6", "butuh latihan rutin"]},
@@ -78,7 +93,7 @@ CATALOG = {
     ]
 }
 
-# === A4: Prompt/rekomendasi ===================================================
+# === A5: Prompt/rekomendasi ===================================================
 def build_system_prompt(audience: str, segment: str) -> str:
     return "\n".join([
         "Etik: sopan, informatif, tanpa janji palsu, tidak memaksa, tidak meminta data sensitif.",
@@ -102,7 +117,7 @@ def recommend(segment: str, signals: Dict) -> List[Dict]:
     hasil.sort(key=lambda x: x["skor"], reverse=True)
     return hasil[:3]
 
-# === A5: Sidebar/state ========================================================
+# === A6: Sidebar/state ========================================================
 with st.sidebar:
     st.title("RG Telesales - Role-Play")
     audience = st.selectbox("Peran lawan bicara", ["Orang Tua", "Murid"], index=0, key="aud")
@@ -118,7 +133,7 @@ if "signals" not in st.session_state:
 if "suppress_next_reply" not in st.session_state:
     st.session_state.suppress_next_reply = False
 
-# === A6: Opener ===============================================================
+# === A7: Opener ===============================================================
 c1, c2, c3 = st.columns(3)
 if c1.button("Opener Orang Tua"):
     st.session_state.messages.append({"role": "user", "content": "Halo, saya orang tua. Anak saya sering bingung saat latihan matematika dan nilainya turun."})
@@ -130,7 +145,7 @@ if c3.button("Minta Rekomendasi"):
     st.session_state.messages.append({"role": "user", "content": "Bisa kasih rekomendasi paket belajar yang cocok dengan kebutuhan saya?"})
     st.session_state.suppress_next_reply = True
 
-# === A7: Header + rekomendasi cepat ==========================================
+# === A8: Header + rekomendasi cepat ==========================================
 st.markdown("## Chat Role-Play")
 sys_prompt = build_system_prompt(audience, segment)
 top_reco = recommend(segment, st.session_state.signals)
@@ -138,13 +153,13 @@ with st.expander("Rekomendasi cepat - dinamis, non-binding"):
     for r in top_reco:
         st.write(f"{r['nama']} - fitur: {', '.join(r['fitur'])} | cocok: {', '.join(r['cocok'])}")
 
-# === A8: Input sebelum render chat ===========================================
+# === A9: Input sebelum render chat ===========================================
 user_input = st.chat_input("Ketik pesan Anda di sini")
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.suppress_next_reply = False
 
-# === A9: Render riwayat =======================================================
+# === A10: Render riwayat ======================================================
 AVATAR_USER = "👤"
 AVATAR_BOT  = "🤖"
 for m in st.session_state.messages[-max_history:]:
@@ -153,7 +168,7 @@ for m in st.session_state.messages[-max_history:]:
     with st.chat_message(role, avatar=avatar):
         st.markdown(m["content"])
 
-# === A10: Prompt composer =====================================================
+# === A11: Prompt composer =====================================================
 def build_prompt(messages: List[Dict], audience: str, segment: str) -> str:
     meta = {
         "audience": audience,
@@ -172,7 +187,7 @@ def build_prompt(messages: List[Dict], audience: str, segment: str) -> str:
         f"[CONTEXT]\nPercakapan sebelumnya:\n{convo}\n\n[RESPON]"
     )
 
-# === A11: Safety settings (SDK baru) =========================================
+# === A12: Safety settings (SDK baru) =========================================
 def _safety_settings_new() -> List[Any]:
     return [
         types_new.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_MEDIUM_AND_ABOVE"),
@@ -181,7 +196,7 @@ def _safety_settings_new() -> List[Any]:
         types_new.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_MEDIUM_AND_ABOVE"),
     ]
 
-# === A12: Safety settings (SDK lama) =========================================
+# === A13: Safety settings (SDK lama) =========================================
 def _safety_kwargs_legacy() -> dict:
     try:
         from google.generativeai.types import HarmCategory, HarmBlockThreshold
@@ -195,7 +210,7 @@ def _safety_kwargs_legacy() -> dict:
     except Exception:
         return {}
 
-# === A13: Ekstraksi teks ======================================================
+# === A14: Ekstraksi teks ======================================================
 def _get_finish_reason(candidate: Any) -> Optional[str]:
     fr = getattr(candidate, "finish_reason", None) or getattr(candidate, "finishReason", None)
     return str(fr) if fr else None
@@ -245,7 +260,7 @@ def _extract_text_from_stream_event(event) -> Optional[str]:
         pass
     return None
 
-# === A14: Config builder (SDK baru) ==========================================
+# === A15: Config builder (SDK baru) ==========================================
 def _build_config_new(sys_text: str):
     return types_new.GenerateContentConfig(
         system_instruction=sys_text,
@@ -257,7 +272,7 @@ def _build_config_new(sys_text: str):
         safety_settings=_safety_settings_new(),
     )
 
-# === A15: Generator abstrak ===================================================
+# === A16: Generator abstrak ===================================================
 def generate_reply() -> str:
     prompt = build_prompt(st.session_state.messages, audience, segment)
 
@@ -363,7 +378,7 @@ def generate_reply() -> str:
             last_reason = f"{type(e).__name__}: {e}"
     return f"Model tidak mengembalikan teks. {last_reason or 'Coba ganti model/parameter.'}"
 
-# === A16: Eksekusi balasan ====================================================
+# === A17: Eksekusi balasan ====================================================
 if (
     st.session_state.messages
     and st.session_state.messages[-1]["role"] == "user"
@@ -374,7 +389,7 @@ if (
         st.session_state.messages.append({"role": "assistant", "content": reply})
         st.markdown(reply)
 
-# === A17: Export transcript ====================================================
+# === A18: Export transcript ====================================================
 def to_markdown_transcript(msgs: List[Dict]) -> str:
     lines = ["# Transcript - RG Telesales Role-Play", ""]
     for m in msgs:
