@@ -1,7 +1,7 @@
 # app.py
 # =============================================================================
 # Streamlit Chat — Telesales Ruangguru (Role-Play) + Gemini 2.5 Flash
-# Single-file portfolio, siap deploy Streamlit/Cloud/Local
+# Optimized: batched streaming, cached model, lighter UI
 # =============================================================================
 import os
 import json
@@ -12,15 +12,34 @@ from typing import List, Dict
 import streamlit as st
 import google.generativeai as genai
 
-# === A1: Konfigurasi kunci dan model =========================================
-# Kunci demo ditanam langsung (sesuai permintaan)
+# === A0: Page config + CSS ringan ============================================
+st.set_page_config(page_title="RG Telesales — Role-Play Chat", layout="wide")
+st.markdown("""
+<style>
+/* Kurangi padding global dan perketat gap komponen */
+.block-container {padding-top: 1rem; padding-bottom: 1rem; max-width: 980px;}
+/* Chat bubble lebih rapat */
+.stChatMessage {gap: .25rem;}
+/* Scroll halus mobile/iOS */
+html, body {scroll-behavior: smooth;}
+@media (max-width: 600px){
+  .block-container {padding-left: .6rem; padding-right: .6rem;}
+}
+</style>
+""", unsafe_allow_html=True)
+
+# === A1: Kunci & Model (cached) ==============================================
 API_KEY = "AIzaSyDd19AHP6cciyErg-bky3u07fXVGnXaraE"
 MODEL_NAME = "models/gemini-2.5-flash"
 
-genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel(model_name=MODEL_NAME)
+@st.cache_resource(show_spinner=False)
+def _init_model():
+    genai.configure(api_key=API_KEY)
+    return genai.GenerativeModel(model_name=MODEL_NAME)
 
-# === A2: Katalog produk ringkas Ruangguru (dummy, untuk rekomendasi) =========
+model = _init_model()
+
+# === A2: Katalog (dummy) ======================================================
 CATALOG = {
     "SD": [
         {"kode": "RB-SD-LIVE", "nama": "RuangBelajar Live SD", "fitur": ["Live interaktif", "Bank soal SD", "Rekaman kelas", "Kuis adaptif"], "cocok": ["kelas 4-6", "butuh latihan rutin"]},
@@ -39,80 +58,52 @@ CATALOG = {
 
 # === A3: Prompt builder =======================================================
 def build_system_prompt(audience: str, segment: str) -> str:
-    garis_etik = (
-        "Etik: sopan, informatif, tanpa janji palsu, tidak memaksa, "
-        "tidak meminta data sensitif, tidak mengklaim garansi hasil."
-    )
-    tujuan = (
-        "Tujuan: deteksi kebutuhan belajar, jelaskan fitur relevan, "
-        "tawarkan sesi lanjutan dengan persetujuan eksplisit."
-    )
-    gaya = (
-        "Gaya: ringkas, langkah-demi-langkah, pertanyaan tertutup dulu lalu terbuka, "
-        "hindari jargon teknis."
-    )
-    role = f"Peran Anda: Chatbot yang memerankan calon {audience} segmen {segment}."
-    kontra = (
-        "Larangan: jangan janji nilai tertentu, jangan minta nomor kartu, "
-        "jangan memancing SARA, hindari tekanan."
-    )
-    return "\n".join([garis_etik, tujuan, gaya, role, kontra])
+    return "\n".join([
+        "Etik: sopan, informatif, tanpa janji palsu, tidak memaksa, tidak meminta data sensitif.",
+        "Tujuan: deteksi kebutuhan belajar, jelaskan fitur relevan, tawarkan sesi lanjutan dengan persetujuan.",
+        "Gaya: ringkas, langkah-demi-langkah, pertanyaan tertutup lalu terbuka, hindari jargon.",
+        f"Peran Anda: Chatbot yang memerankan calon {audience} segmen {segment}.",
+        "Larangan: jangan janji nilai, jangan minta data pembayaran, hindari SARA."
+    ])
 
-# === A4: Rekomendasi produk berdasar segment + sinyal kebutuhan ==============
+# === A4: Rekomendasi sederhana ===============================================
 def recommend(segment: str, signals: Dict) -> List[Dict]:
     pilihan = CATALOG.get(segment, [])
     hasil = []
     for item in pilihan:
         skor = 0
-        if signals.get("fokus_ujian") and "UTBK" in item["nama"]:
-            skor += 3
-        if signals.get("butuh_live") and any("Live" in f or "Live" in item["nama"] for f in item["fitur"]):
-            skor += 2
-        if signals.get("butuh_latihan") and any("Bank soal" in f or "Tryout" in f for f in item["fitur"]):
-            skor += 2
-        if segment == "SD" and "Video" in item["nama"] and signals.get("konsep_dasar"):
-            skor += 2
-        if segment in ["SMP", "SMA"] and "Paket" in item["nama"]:
-            skor += 1
+        if signals.get("fokus_ujian") and "UTBK" in item["nama"]: skor += 3
+        if signals.get("butuh_live") and ("Live" in item["nama"] or any("Live" in f for f in item["fitur"])): skor += 2
+        if signals.get("butuh_latihan") and any(("Bank soal" in f) or ("Tryout" in f) for f in item["fitur"]): skor += 2
+        if segment == "SD" and "Video" in item["nama"] and signals.get("konsep_dasar"): skor += 2
+        if segment in ["SMP", "SMA"] and "Paket" in item["nama"]: skor += 1
         hasil.append({"skor": skor, **item})
     hasil.sort(key=lambda x: x["skor"], reverse=True)
     return hasil[:3]
 
-# === A5: UI ===================================================================
-st.set_page_config(page_title="RG Telesales — Role-Play Chat", layout="wide")
-
+# === A5: Sidebar (stabil) =====================================================
 with st.sidebar:
     st.title("RG Telesales — Role-Play")
-    audience = st.selectbox("Peran lawan bicara", ["Orang Tua", "Murid"], index=0)
-    segment = st.selectbox("Segmen kelas", ["SD", "SMP", "SMA"], index=1)
-    temperature = st.slider("Creativity (temperature)", 0.0, 1.0, 0.3, 0.1)
-    max_history = st.slider("Batas riwayat pesan", 4, 40, 16, 2)
+    audience = st.selectbox("Peran lawan bicara", ["Orang Tua", "Murid"], index=0, key="aud")
+    segment = st.selectbox("Segmen kelas", ["SD", "SMP", "SMA"], index=1, key="seg")
+    temperature = st.slider("Creativity (temperature)", 0.0, 1.0, 0.3, 0.1, key="temp")
+    max_history = st.slider("Batas riwayat pesan", 4, 32, 8, 2, key="hist")  # default lebih kecil = lebih cepat
     st.caption(f"Model: {MODEL_NAME}")
-    st.caption("Kunci: demo tertanam untuk portfolio")
+    st.caption("Kunci demo tertanam untuk portfolio")
 
 # === A6: Session state ========================================================
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if "messages" not in st.session_state: st.session_state.messages = []
 if "signals" not in st.session_state:
     st.session_state.signals = {"fokus_ujian": False, "butuh_live": False, "butuh_latihan": True, "konsep_dasar": False}
 
 # === A7: Preset openers ======================================================
-col1, col2, col3 = st.columns(3)
-with col1:
-    if st.button("Opener Orang Tua"):
-        st.session_state.messages.append(
-            {"role": "user", "content": "Halo, saya orang tua. Anak saya sering bingung saat latihan matematika dan nilainya turun."}
-        )
-with col2:
-    if st.button("Opener Murid"):
-        st.session_state.messages.append(
-            {"role": "user", "content": "Kak, aku kelas 9. Aku pengin naik nilai IPA, tapi suka keteteran di fisika."}
-        )
-with col3:
-    if st.button("Minta Rekomendasi"):
-        st.session_state.messages.append(
-            {"role": "user", "content": "Bisa kasih rekomendasi paket belajar yang cocok dengan kebutuhan saya?"}
-        )
+c1, c2, c3 = st.columns(3)
+if c1.button("Opener Orang Tua"):
+    st.session_state.messages.append({"role": "user", "content": "Halo, saya orang tua. Anak saya sering bingung saat latihan matematika dan nilainya turun."})
+if c2.button("Opener Murid"):
+    st.session_state.messages.append({"role": "user", "content": "Kak, aku kelas 9. Aku pengin naik nilai IPA, tapi suka keteteran di fisika."})
+if c3.button("Minta Rekomendasi"):
+    st.session_state.messages.append({"role": "user", "content": "Bisa kasih rekomendasi paket belajar yang cocok dengan kebutuhan saya?"})
 
 # === A8: Header + rekomendasi kontekstual ====================================
 st.markdown("## Chat Role-Play")
@@ -133,56 +124,66 @@ user_input = st.chat_input("Ketik pesan Anda di sini")
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-# === A11: Compose prompt untuk Gemini ========================================
+# === A11: Build parts =========================================================
 def build_parts(messages: List[Dict], sys_text: str, audience: str, segment: str) -> List[Dict]:
     meta = {
         "audience": audience,
         "segment": segment,
         "time": datetime.now().isoformat(timespec="seconds"),
-        "policy": {
-            "no_fake_promises": True,
-            "no_sensitive_data": True,
-            "no_payment_request": True
-        }
+        "policy": {"no_fake_promises": True, "no_sensitive_data": True, "no_payment_request": True},
     }
-    instruksi = (
-        f"{sys_text}\n"
-        "Taktik: mulai dengan ringkas, gunakan pertanyaan klarifikasi 1-2 baris, "
-        "akhiri dengan opsi tindak lanjut tanpa menekan."
-    )
+    instruksi = (f"{sys_text}\n"
+                 "Taktik: ringkas, mulai dengan 1-2 pertanyaan klarifikasi, akhiri opsi tindak lanjut tanpa menekan. "
+                 "Batas 6 baris.")
     history_text = []
     for m in messages[-max_history:]:
         role = "User" if m["role"] == "user" else "Assistant"
         history_text.append(f"{role}: {m['content']}")
     convo = "\n".join(history_text)
-
     return [
         {"text": f"[META]\n{json.dumps(meta, ensure_ascii=False)}"},
         {"text": f"[SYSTEM]\n{instruksi}"},
         {"text": f"[CATALOG]\n{json.dumps(CATALOG.get(segment, []), ensure_ascii=False)}"},
-        {"text": f"[CONTEXT]\nPercakapan sebelumnya:\n{convo}\n[RESPON] Berikan jawaban sesuai peran lawan bicara, tidak lebih dari 6 baris, gunakan poin bila perlu."}
+        {"text": f"[CONTEXT]\nPercakapan sebelumnya:\n{convo}\n[RESPON]"},
     ]
 
-# === A12: Panggil model + streaming ==========================================
+# === A12: Panggil model — batched streaming tanpa sleep ======================
 def generate_reply():
     parts = build_parts(st.session_state.messages, sys_prompt, audience, segment)
     try:
         resp = model.generate_content(
             parts,
-            generation_config=genai.types.GenerationConfig(temperature=temperature),
+            generation_config=genai.types.GenerationConfig(
+                temperature=float(temperature),
+                top_p=0.9,
+                top_k=40,
+                max_output_tokens=256,
+                candidate_count=1,
+            ),
             stream=True
         )
-        out = []
         area = st.empty()
-        acc = ""
+        acc = []
+        last_push = time.perf_counter()
+        BATCH_CHARS = 120          # update UI per ±120 char
+        MIN_INTERVAL = 0.03        # atau min 30 ms
+        pending = 0
+
         for ev in resp:
             chunk = getattr(ev, "text", None)
-            if chunk:
-                out.append(chunk)
-                acc += chunk
-                area.markdown(acc)
-                time.sleep(0.01)
-        return "".join(out).strip()
+            if not chunk: continue
+            acc.append(chunk)
+            pending += len(chunk)
+            now = time.perf_counter()
+            if pending >= BATCH_CHARS or (now - last_push) >= MIN_INTERVAL:
+                area.markdown("".join(acc))
+                pending = 0
+                last_push = now
+
+        final_text = "".join(acc).strip()
+        if final_text:
+            area.markdown(final_text)
+        return final_text or " "
     except Exception as e:
         return f"Gagal memproses: {e}"
 
@@ -200,19 +201,12 @@ def to_markdownTranscript(msgs: List[Dict]) -> str:
         lines.append(f"**{who}:** {m['content']}")
     return "\n\n".join(lines)
 
-colA, colB = st.columns([1,1])
-with colA:
+cA, cB = st.columns([1,1])
+with cA:
     if st.button("Unduh Transcript .md"):
         md = to_markdownTranscript(st.session_state.messages)
-        st.download_button(
-            "Download",
-            data=md,
-            file_name="transcript_rg_telesales.md",
-            mime="text/markdown",
-            use_container_width=True
-        )
-with colB:
-    st.caption("Privasi: jangan tempel data sensitif saat role-play.")
+        st.download_button("Download", data=md, file_name="transcript_rg_telesales.md", mime="text/markdown", use_container_width=True)
+with cB:
+    st.caption("Privasi: hindari data sensitif saat role-play.")
 
-# === A15: Penanda footer ======================================================
-st.caption("Portfolio demo. Kunci demo tertanam di aplikasi.")
+st.caption("Portfolio demo. Optimized streaming dan UI ringan.")
