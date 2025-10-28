@@ -448,5 +448,3 @@ with cA:
         )
 with cB:
     st.caption("Privasi: hindari data sensitif saat role-play.")
-
-st.caption("Persona = Orang Tua/Murid, opener oleh assistant, avatar dinamis, tanpa pitching.")
