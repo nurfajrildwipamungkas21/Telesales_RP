@@ -175,6 +175,7 @@ SEG_RULES = {
     "SMA": "Boleh UTBK dan materi lanjutan; hindari topik terlalu dasar SD/SMP.",
 }
 
+# === Filter frasa yang dilarang (CS-like, perkenalan diri, dan penjadwalan) ==
 STOP_PHRASES = [
     "ada yang bisa saya bantu",
     "bagaimana saya bisa membantu",
@@ -249,7 +250,8 @@ with st.sidebar:
     st.title("RG Telesales - Role-Play")
     audience = st.selectbox("Peran lawan bicara", ["Orang Tua", "Murid"], index=0, key="aud")
     segment = st.selectbox("Segmen kelas", ["SD", "SMP", "SMA"], index=1, key="seg")
-    st.caption(f"SDK: {SDK} | Model: {MODEL_PRIMARY}")
+    if os.getenv("SHOW_MODEL_INFO") == "1":
+        st.caption(f"SDK: {SDK} | Model: {MODEL_PRIMARY}")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -276,60 +278,14 @@ def current_temperature() -> float:
 def history_window() -> int:
     n = len(st.session_state.get("messages", []))
     if st.session_state.get("intent") == "opener":
-        return 0
+        return 0  # abaikan riwayat saat pembuka agar variasi tidak terikat konteks lama
     if n <= 6:
         return 6
     if n <= 12:
         return 8
     return 12
 
-# === A7: Opener ===============================================================
-def _trigger_model_opener(target_audience: str):
-    st.session_state.bot_persona = target_audience
-    st.session_state.opener_scenario = _sample_scenario(target_audience, st.session_state.get("seg", "SMP"))
-    st.session_state.intent = "opener"
-    ping = "⏩ OPENER"
-    st.session_state.messages.append({"role": "user", "content": ping})
-    st.session_state.internal_triggers.append(ping)
-    st.session_state.suppress_next_reply = False
-
-c1, c2, c3 = st.columns(3)
-if c1.button("Opener Orang Tua"):
-    _trigger_model_opener("Orang Tua")
-if c2.button("Opener Murid"):
-    _trigger_model_opener("Murid")
-if c3.button("Minta Rekomendasi"):
-    st.session_state.messages.append({"role": "user", "content": "Bisa kasih rekomendasi paket belajar yang cocok?"})
-    st.session_state.suppress_next_reply = False
-
-# === A8: Header + rekomendasi cepat (UI informatif) ==========================
-st.markdown("## Chat Role-Play")
-sys_prompt = build_system_prompt(get_effective_audience(), segment)
-# Rekomendasi cepat dinonaktifkan
-
-# === A9: Input sebelum render chat ===========================================
-user_input = st.chat_input("Ketik pesan Anda di sini")
-if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    st.session_state.bot_persona = st.session_state.get("aud", "Orang Tua")  # sinkron persona ke pilihan terkini
-    st.session_state.suppress_next_reply = False
-
-# === A10: Render riwayat (avatar dibedakan) ==================================
-AVATAR_USER = "🧑"
-
-def _bot_avatar(aud: str) -> str:
-    return "🧑‍🦳" if aud == "Orang Tua" else "🧑‍🎓"
-
-h = history_window()
-for m in st.session_state.messages[-h or None:]:
-    if m["content"] in st.session_state.internal_triggers:
-        continue
-    role = "user" if m["role"] == "user" else "assistant"
-    avatar = AVATAR_USER if role == "user" else _bot_avatar(get_effective_audience())
-    with st.chat_message(role, avatar=avatar):
-        st.markdown(m["content"])
-
-# === A11: Prompt composer =====================================================
+# === A6b: Deteksi sapaan minimal dan jawaban ringkas ==========================
 GREETING_PATTERNS = [
     r"^\s*(halo|hai|hi|helo|hello)\s*!?\s*$",
     r"^\s*(halo|hai|hi|helo|hello)\s+kak\b.*$",
@@ -351,6 +307,49 @@ def _is_minimal_greeting(text: str) -> bool:
                 return True
     return False
 
+# === A7: Opener ===============================================================
+def _trigger_model_opener(target_audience: str):
+    st.session_state.bot_persona = target_audience
+    st.session_state.opener_scenario = _sample_scenario(target_audience, st.session_state.get("seg", "SMP"))
+    st.session_state.intent = "opener"
+    ping = "⏩ OPENER"
+    st.session_state.messages.append({"role": "user", "content": ping})
+    st.session_state.internal_triggers.append(ping)
+    st.session_state.suppress_next_reply = False
+
+c1, c2 = st.columns(2)
+if c1.button("Opener Orang Tua"):
+    _trigger_model_opener("Orang Tua")
+if c2.button("Opener Murid"):
+    _trigger_model_opener("Murid")
+
+# === A8: Header + rekomendasi cepat (UI informatif) ==========================
+st.markdown("## Chat Role-Play")
+sys_prompt = build_system_prompt(get_effective_audience(), segment)
+# Rekomendasi cepat dinonaktifkan
+
+# === A9: Input sebelum render chat ===========================================
+user_input = st.chat_input("Ketik pesan Anda di sini")
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    st.session_state.suppress_next_reply = False
+
+# === A10: Render riwayat (avatar dibedakan) ==================================
+AVATAR_USER = "🧑"
+
+def _bot_avatar(aud: str) -> str:
+    return "🧑‍🦳" if aud == "Orang Tua" else "🧑‍🎓"
+
+h = history_window()
+for m in st.session_state.messages[-h or None:]:
+    if m["content"] in st.session_state.internal_triggers:
+        continue
+    role = "user" if m["role"] == "user" else "assistant"
+    avatar = AVATAR_USER if role == "user" else _bot_avatar(get_effective_audience())
+    with st.chat_message(role, avatar=avatar):
+        st.markdown(m["content"])
+
+# === A11: Prompt composer =====================================================
 def build_prompt(messages: List[Dict], audience: str, segment: str, opener: bool = False) -> str:
     meta = {
         "audience": audience,
