@@ -8,6 +8,7 @@
 import os
 import json
 import time
+import re
 import random
 from datetime import datetime
 from typing import List, Dict, Optional, Any
@@ -174,7 +175,7 @@ SEG_RULES = {
     "SMA": "Boleh UTBK dan materi lanjutan; hindari topik terlalu dasar SD/SMP.",
 }
 
-# === Perubahan: cegah jawaban berjenis 'bisa dihubungi' dan pertanyaan waktu ==
+# === Filter frasa yang dilarang (CS-like, perkenalan diri, dan penjadwalan) ==
 STOP_PHRASES = [
     "ada yang bisa saya bantu",
     "bagaimana saya bisa membantu",
@@ -194,6 +195,11 @@ STOP_PHRASES = [
     "kapan waktu yang tepat",
     "diskusi sebentar atau nanti",
     "apakah sekarang waktu",
+    "ini bundanya",
+    "ini ayahnya",
+    "ini ibunya",
+    "ini orang tua",
+    "ini orangtua",
 ]
 
 def build_dialog_instruction(audience: str, segment: str) -> str:
@@ -203,11 +209,11 @@ def build_dialog_instruction(audience: str, segment: str) -> str:
         f"Anda tetap berperan sebagai {audience} segmen {segment}. "
         f"Patuh aturan segmen: {rule} "
         "Tanggapi ketat sesuai konteks pesan terakhir. Tidak menawarkan bantuan. Tidak promosi produk. "
-        "Tidak menyebut ketersediaan, tidak menanyakan waktu/jadwal, tidak bernada customer service. "
+        "Tidak menyebut ketersediaan, tidak menanyakan waktu/jadwal, tidak memperkenalkan identitas diri proaktif. "
         f"Hindari frasa: {banned}. "
-        "Jika pesan pengguna adalah sapaan/cek identitas/kontak, akui identitas singkat saja dan lanjutkan dengan satu pertanyaan isi yang netral, "
-        "contoh: 'Ini Bundanya Azam. Ada apa ya?'. "
-        "Gunakan orang pertama konsisten sesuai persona."
+        "Jika pesan pengguna hanya sapaan/cek identitas, balas singkat dan netral tanpa perkenalan diri, contoh: "
+        "'Halo juga, ada apa ya?' atau 'Halo, siapa ya?'. "
+        "Gunakan orang pertama konsisten sesuai persona hanya jika ditanya."
     )
 
 def build_opener_instruction(audience: str, segment: str) -> str:
@@ -271,12 +277,34 @@ def current_temperature() -> float:
 def history_window() -> int:
     n = len(st.session_state.get("messages", []))
     if st.session_state.get("intent") == "opener":
-        return 0
+        return 0  # abaikan riwayat saat pembuka agar variasi tidak terikat konteks lama
     if n <= 6:
         return 6
     if n <= 12:
         return 8
     return 12
+
+# === A6b: Deteksi sapaan minimal dan jawaban ringkas ==========================
+GREETING_PATTERNS = [
+    r"^\s*(halo|hai|hi|helo|hello)\s*!?\s*$",
+    r"^\s*(halo|hai|hi|helo|hello)\s+kak\b.*$",
+    r"^\s*(ass?alam(u|)alaikum)(\s+wr\.?\s*wb\.?)?\s*$",
+    r"^\s*(pagi|siang|sore|malam)\s*!?\s*$",
+]
+GREETING_REPLIES = [
+    "Halo juga, ada apa ya?",
+    "Halo, ada keperluan apa?",
+    "Halo juga, bisa disampaikan maksudnya?",
+    "Halo, ada yang ingin dibahas?",
+]
+
+def _is_minimal_greeting(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if len(t) <= 20:
+        for pat in GREETING_PATTERNS:
+            if re.match(pat, t):
+                return True
+    return False
 
 # === A7: Opener ===============================================================
 def _trigger_model_opener(target_audience: str):
@@ -543,9 +571,16 @@ if (
     and st.session_state.messages[-1]["role"] == "user"
     and not st.session_state.suppress_next_reply
 ):
-    with st.chat_message("assistant", avatar=_bot_avatar(get_effective_audience())):
-        reply = generate_reply()
+    last_user_msg = st.session_state.messages[-1]["content"]
+    if st.session_state.intent != "opener" and _is_minimal_greeting(last_user_msg):
+        reply = random.choice(GREETING_REPLIES)
+        with st.chat_message("assistant", avatar=_bot_avatar(get_effective_audience())):
+            st.markdown(reply)
         st.session_state.messages.append({"role": "assistant", "content": reply})
+    else:
+        with st.chat_message("assistant", avatar=_bot_avatar(get_effective_audience())):
+            reply = generate_reply()
+            st.session_state.messages.append({"role": "assistant", "content": reply})
     if st.session_state.intent == "opener":
         st.session_state.intent = None
         st.session_state.opener_scenario = None  # reset agar klik berikutnya sampling ulang
