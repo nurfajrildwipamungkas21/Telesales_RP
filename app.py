@@ -8,6 +8,7 @@
 import os
 import json
 import time
+import random
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 
@@ -93,6 +94,39 @@ CATALOG = {
     ]
 }
 
+# === A4b: Pool skenario opener ===============================================
+OPENER_POOL: Dict[str, List[str]] = {
+    "Murid": [
+        "Bingung bagi waktu antara tugas harian dan persiapan ulangan; sering kejar deadline.",
+        "Nilai Fisika turun karena kesulitan konsep gaya dan gerak; takut salah tanya di kelas.",
+        "Matematika bab persamaan kuadrat mentok; latihan sudah dicoba tapi masih salah di langkah awal.",
+        "UTBK mulai dekat; susah konsisten belajar tiap hari karena ekskul dan les.",
+        "Gangguan HP dan notifikasi bikin fokus pecah saat belajar di rumah.",
+        "Kimia stoikiometri bikin pusing; butuh cara cepet paham tanpa hafalan rumus panjang.",
+        "Sulit memahami teks panjang Bahasa Indonesia; bingung cara nyari ide pokok cepat.",
+        "Cemas presentasi Bahasa Inggris; ingin sounding natural tapi grogi berat."
+    ],
+    "Orang Tua": [
+        "Anak sulit lepas dari HP saat jam belajar; tugas sering ditunda.",
+        "Nilai Matematika menurun dua bulan terakhir; remedial berulang tidak efektif.",
+        "Menjelang kenaikan kelas, jadwal padat; perlu pola belajar fleksibel dan terukur.",
+        "Anak cepat bosan saat belajar IPA; minta pendekatan yang lebih praktis.",
+        "Kesulitan adaptasi setelah pindah sekolah; ritme belajar belum stabil.",
+        "Orangtua butuh cara memonitor progres tanpa harus mendampingi terus-menerus.",
+        "Anak takut tanya di kelas; perlu cara bangun kepercayaan diri akademik.",
+        "Les privat mahal; ingin alternatif yang lebih efisien tapi tetap berdampak."
+    ]
+}
+
+def _sample_scenario(audience: str, segment: str) -> str:
+    pool = OPENER_POOL.get(audience, [])
+    if not pool:
+        return "Keluhan belajar umum sesuai jenjang, tanpa menyebut produk."
+    # seed ringan agar lebih variatif lintas klik
+    rnd_seed = time.time_ns() ^ hash(segment) ^ random.getrandbits(32)
+    random.seed(rnd_seed)
+    return random.choice(pool)
+
 # === A5: Prompt untuk persona non-sales ======================================
 def build_system_prompt(audience: str, segment: str) -> str:
     return "\n".join([
@@ -105,10 +139,11 @@ def build_system_prompt(audience: str, segment: str) -> str:
     ])
 
 def build_opener_instruction(audience: str, segment: str) -> str:
+    scenario = st.session_state.get("opener_scenario") or _sample_scenario(audience, segment)
     return (
         f"Buat pembuka percakapan 1–2 kalimat sebagai {audience} segmen {segment}. "
-        "Nyatakan keluhan atau tujuan spesifik secara natural. "
-        "Tanpa menawarkan produk. Tanpa menyebut paket. Variasikan gaya agar tidak identik dengan keluaran sebelumnya."
+        f"Gunakan skenario: {scenario}. "
+        "Natural, tanpa menyebut produk atau paket. Variasikan diksi agar berbeda setiap kali."
     )
 
 def recommend(segment: str, signals: Dict) -> List[Dict]:
@@ -149,18 +184,20 @@ if "internal_triggers" not in st.session_state:
     st.session_state.internal_triggers = []  # penanda pesan sintetis
 if "bot_persona" not in st.session_state:
     st.session_state.bot_persona = audience
+if "opener_scenario" not in st.session_state:
+    st.session_state.opener_scenario = None
 
 def get_effective_audience() -> str:
     return st.session_state.get("bot_persona", st.session_state.get("aud", "Orang Tua"))
 
 # Auto tuning (tanpa kontrol UI)
 def current_temperature() -> float:
-    return 0.2 if st.session_state.get("intent") == "opener" else 0.3
+    return 0.35 if st.session_state.get("intent") == "opener" else 0.3
 
 def history_window() -> int:
     n = len(st.session_state.get("messages", []))
     if st.session_state.get("intent") == "opener":
-        return 4
+        return 0  # abaikan riwayat saat pembuka agar variasi tidak terikat konteks lama
     if n <= 6:
         return 6
     if n <= 12:
@@ -170,6 +207,7 @@ def history_window() -> int:
 # === A7: Opener ===============================================================
 def _trigger_model_opener(target_audience: str):
     st.session_state.bot_persona = target_audience
+    st.session_state.opener_scenario = _sample_scenario(target_audience, st.session_state.get("seg", "SMP"))
     st.session_state.intent = "opener"
     ping = "⏩ OPENER"
     st.session_state.messages.append({"role": "user", "content": ping})
@@ -203,7 +241,7 @@ def _bot_avatar(aud: str) -> str:
     return "🧑‍🦳" if aud == "Orang Tua" else "🧑‍🎓"
 
 h = history_window()
-for m in st.session_state.messages[-h:]:
+for m in st.session_state.messages[-h or None:]:
     if m["content"] in st.session_state.internal_triggers:
         continue
     role = "user" if m["role"] == "user" else "assistant"
@@ -223,11 +261,12 @@ def build_prompt(messages: List[Dict], audience: str, segment: str, opener: bool
     }
     history_lines = []
     limit = history_window()
-    for m in messages[-limit:]:
-        if m["content"] in st.session_state.internal_triggers:
-            continue
-        role = "User" if m["role"] == "user" else "Assistant"
-        history_lines.append(f"{role}: {m['content']}")
+    if not opener and limit:
+        for m in messages[-limit:]:
+            if m["content"] in st.session_state.internal_triggers:
+                continue
+            role = "User" if m["role"] == "user" else "Assistant"
+            history_lines.append(f"{role}: {m['content']}")
     convo = "\n".join(history_lines)
     task = build_opener_instruction(audience, segment) if opener else "Jawab sebagai persona Anda. Tetap dilarang pitching."
     return (
@@ -435,6 +474,7 @@ if (
         st.session_state.messages.append({"role": "assistant", "content": reply})
     if st.session_state.intent == "opener":
         st.session_state.intent = None
+        st.session_state.opener_scenario = None  # reset agar klik berikutnya sampling ulang
 
 # === A18: Export transcript ====================================================
 def to_markdown_transcript(msgs: List[Dict]) -> str:
