@@ -10,6 +10,9 @@ import json
 import time
 import re
 import random
+import sqlite3
+import uuid
+from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 
@@ -77,6 +80,109 @@ def _init_client_or_none():
         return None  # jalur legacy tidak memakai objek client
 
 client = _init_client_or_none()
+
+# === A3b: Storage (SQLite) ====================================================
+DB_PATH = Path(__file__).with_name("telesales_history.sqlite")
+
+@st.cache_resource(show_spinner=False)
+def _get_db():
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS convo(
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            audience TEXT,
+            segment TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            messages_json TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_convo_updated ON convo(updated_at DESC)")
+    return conn
+
+def _prune_internal_msgs(msgs: List[Dict]) -> List[Dict]:
+    intr = set(st.session_state.get("internal_triggers", []))
+    return [m for m in msgs if m.get("content") not in intr]
+
+def _derive_title(msgs: List[Dict]) -> str:
+    for m in msgs:
+        if m.get("role") == "user":
+            t = (m.get("content") or "").strip().splitlines()[0]
+            return (t[:80] or "Percakapan")
+    return f"Chat {datetime.now():%Y-%m-%d %H:%M}"
+
+def save_current_convo():
+    conn = _get_db()
+    msgs = _prune_internal_msgs(st.session_state.get("messages", []))
+    if not msgs:
+        return None
+    convo_id = st.session_state.get("convo_id") or uuid.uuid4().hex
+    now = datetime.now().isoformat(timespec="seconds")
+    row = conn.execute("SELECT created_at FROM convo WHERE id=?", (convo_id,)).fetchone()
+    created_at = row[0] if row else now
+    title = st.session_state.get("convo_title") or _derive_title(msgs)
+    conn.execute(
+        "INSERT INTO convo(id,title,audience,segment,created_at,updated_at,messages_json) "
+        "VALUES(?,?,?,?,?,?,?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "title=excluded.title,audience=excluded.audience,segment=excluded.segment,updated_at=excluded.updated_at,messages_json=excluded.messages_json",
+        (
+            convo_id,
+            title,
+            st.session_state.get("aud", ""),
+            st.session_state.get("seg", ""),
+            created_at,
+            now,
+            json.dumps(msgs, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    st.session_state.convo_id = convo_id
+    st.session_state.convo_title = title
+    return convo_id
+
+def list_convos() -> List[Dict]:
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT id,title,audience,segment,created_at,updated_at FROM convo ORDER BY updated_at DESC"
+    ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "title": r[1],
+            "audience": r[2],
+            "segment": r[3],
+            "created_at": r[4],
+            "updated_at": r[5],
+        }
+        for r in rows
+    ]
+
+def load_convo(convo_id: str):
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT messages_json,audience,segment,title FROM convo WHERE id=?", (convo_id,)
+    ).fetchone()
+    if not row:
+        return
+    msgs = json.loads(row[0]) if row[0] else []
+    st.session_state.messages = msgs
+    st.session_state.aud = row[1] or st.session_state.get("aud", "Orang Tua")
+    st.session_state.seg = row[2] or st.session_state.get("seg", "SMP")
+    st.session_state.bot_persona = st.session_state.aud
+    st.session_state.convo_id = convo_id
+    st.session_state.convo_title = row[3] or _derive_title(msgs)
+    st.session_state.intent = None
+    st.session_state.suppress_next_reply = True
+
+def delete_convo(convo_id: str):
+    conn = _get_db()
+    conn.execute("DELETE FROM convo WHERE id=?", (convo_id,))
+    conn.commit()
+    if st.session_state.get("convo_id") == convo_id:
+        for k in ["convo_id", "convo_title"]:
+            st.session_state.pop(k, None)
 
 # === A4: Data katalog (UI saja; tidak dimasukkan ke prompt) ==================
 CATALOG = {
@@ -252,6 +358,38 @@ with st.sidebar:
     segment = st.selectbox("Segmen kelas", ["SD", "SMP", "SMA"], index=1, key="seg")
     if os.getenv("SHOW_MODEL_INFO") == "1":
         st.caption(f"SDK: {SDK} | Model: {MODEL_PRIMARY}")
+    st.divider()
+    st.subheader("Riwayat Chat", anchor=False)
+    convos = list_convos()
+    labels = [
+        f"{c['title'][:40]} · {c['audience'] or '-'}-{c['segment'] or '-'} · {c['updated_at'][5:16]}"
+        for c in convos
+    ] or ["(belum ada)"]
+    sel_idx = st.selectbox(
+        "Semua sesi",
+        options=list(range(len(labels))),
+        format_func=lambda i: labels[i],
+        index=0 if convos else 0,
+        key="hist_select_idx",
+    )
+    st.caption("Aksi riwayat")
+    cols = st.columns(3)
+    with cols[0]:
+        if st.button("Buka", key="btn_open_hist") and convos:
+            load_convo(convos[sel_idx]["id"])
+    with cols[1]:
+        if st.button("Simpan", key="btn_save_hist"):
+            save_current_convo()
+    with cols[2]:
+        if st.button("Hapus", key="btn_delete_hist") and convos:
+            delete_convo(convos[sel_idx]["id"])
+    if st.button("Sesi Baru", key="btn_new_session"):
+        st.session_state.messages = []
+        st.session_state.internal_triggers = []
+        st.session_state.intent = None
+        st.session_state.suppress_next_reply = True
+        for k in ["convo_id", "convo_title"]:
+            st.session_state.pop(k, None)
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -333,6 +471,7 @@ user_input = st.chat_input("Ketik pesan Anda di sini")
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.suppress_next_reply = False
+    save_current_convo()  # autosave setelah input
 
 # === A10: Render riwayat (avatar dibedakan) ==================================
 AVATAR_USER = "🧑"
@@ -579,6 +718,7 @@ if (
         with st.chat_message("assistant", avatar=_bot_avatar(get_effective_audience())):
             reply = generate_reply()
             st.session_state.messages.append({"role": "assistant", "content": reply})
+        save_current_convo()  # autosave setelah balasan model
     if st.session_state.intent == "opener":
         st.session_state.intent = None
         st.session_state.opener_scenario = None  # reset agar klik berikutnya sampling ulang
