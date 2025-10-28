@@ -7,22 +7,18 @@ import os
 import json
 import time
 from datetime import datetime
-from typing import List, Dict, Iterable, Optional
+from typing import List, Dict, Optional
 
 import streamlit as st
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # === A0: Page config + CSS ====================================================
 st.set_page_config(page_title="RG Telesales - Role-Play Chat", layout="wide")
 st.markdown(
     """
 <style>
-/* ruang atas cukup agar header tidak terpotong */
 .block-container {padding-top: 2.25rem; padding-bottom: 1rem; max-width: 980px;}
-/* chat bubble rapat */
 .stChatMessage {gap: .25rem;}
-/* scroll halus */
 html, body {scroll-behavior: smooth;}
 @media (max-width: 600px){
   .block-container {padding-left: .6rem; padding-right: .6rem;}
@@ -32,24 +28,37 @@ html, body {scroll-behavior: smooth;}
     unsafe_allow_html=True,
 )
 
-# === A1: Kunci dan Model (cached) ============================================
+# === A1: API key dan model (cached) ==========================================
 API_KEY = os.getenv(
     "GEMINI_API_KEY",
-    "AIzaSyDd19AHP6cciyErg-bky3u07fXVGnXaraE"  # demo key untuk portfolio
+    "AIzaSyDd19AHP6cciyErg-bky3u07fXVGnXaraE"  # demo untuk portfolio
 )
 MODEL_NAME = "models/gemini-2.5-flash"
 
-SAFETY_SETTINGS = {
-    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    HarmCategory.HARM_CATEGORY_SEXUAL_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-}
+def _build_safety_kwargs() -> dict:
+    """Kompabilitas lintas-versi SDK. Jika enum tidak ada, kembalikan {}."""
+    try:
+        from google.generativeai.types import HarmCategory, HarmBlockThreshold
+    except Exception:
+        return {}
+    pairs = [
+        ("HARM_CATEGORY_HARASSMENT", "BLOCK_MEDIUM_AND_ABOVE"),
+        ("HARM_CATEGORY_HATE_SPEECH", "BLOCK_MEDIUM_AND_ABOVE"),
+        ("HARM_CATEGORY_SEXUAL_CONTENT", "BLOCK_MEDIUM_AND_ABOVE"),
+        ("HARM_CATEGORY_DANGEROUS_CONTENT", "BLOCK_MEDIUM_AND_ABOVE"),
+    ]
+    settings = []
+    for cname, tname in pairs:
+        cat = getattr(HarmCategory, cname, None)
+        thr = getattr(HarmBlockThreshold, tname, None)
+        if cat is not None and thr is not None:
+            settings.append({"category": cat, "threshold": thr})
+    return {"safety_settings": settings} if settings else {}
 
 @st.cache_resource(show_spinner=False)
 def _init_model():
     genai.configure(api_key=API_KEY)
-    return genai.GenerativeModel(model_name=MODEL_NAME, safety_settings=SAFETY_SETTINGS)
+    return genai.GenerativeModel(model_name=MODEL_NAME, **_build_safety_kwargs())
 
 model = _init_model()
 
@@ -140,7 +149,7 @@ sys_prompt = build_system_prompt(audience, segment)
 top_reco = recommend(segment, st.session_state.signals)
 with st.expander("Rekomendasi cepat - dinamis, non-binding"):
     for r in top_reco:
-        st.write(f"{r['nama']} • fitur: {', '.join(r['fitur'])} • cocok: {', '.join(r['cocok'])}")
+        st.write(f"{r['nama']} - fitur: {', '.join(r['fitur'])} | cocok: {', '.join(r['cocok'])}")
 
 # === A9: Input pengguna sebelum render chat ==================================
 user_input = st.chat_input("Ketik pesan Anda di sini")
@@ -149,8 +158,8 @@ if user_input:
     st.session_state.suppress_next_reply = False
 
 # === A10: Render riwayat dengan avatar valid =================================
-AVATAR_USER = "U"
-AVATAR_BOT  = "G"
+AVATAR_USER = "👤"   # emoji valid, bukan huruf tunggal
+AVATAR_BOT  = "🤖"   # emoji valid, bukan huruf tunggal
 
 for m in st.session_state.messages[-max_history:]:
     role = "user" if m["role"] == "user" else "assistant"
@@ -182,14 +191,12 @@ def build_prompt(messages: List[Dict], sys_text: str, audience: str, segment: st
 
 # === A12: Util ekstraksi teks ================================================
 def _extract_text_from_response(resp) -> str:
-    # 1) accessor cepat
     try:
         t = getattr(resp, "text", None)
         if isinstance(t, str) and t.strip():
             return t
     except Exception:
         pass
-    # 2) telusuri candidates → parts
     try:
         buf: List[str] = []
         for cand in (getattr(resp, "candidates", None) or []):
@@ -203,7 +210,6 @@ def _extract_text_from_response(resp) -> str:
             return "".join(buf)
     except Exception:
         pass
-    # 3) cek block reason untuk feedback eksplisit
     fb = getattr(resp, "prompt_feedback", None)
     reason = getattr(fb, "block_reason", None) if fb else None
     if reason:
@@ -211,7 +217,6 @@ def _extract_text_from_response(resp) -> str:
     return ""
 
 def _extract_text_from_stream(event) -> Optional[str]:
-    # beberapa versi SDK memberi delta di event.text, sebagian lain di parts[0].text
     try:
         t = getattr(event, "text", None)
         if isinstance(t, str) and t:
@@ -241,7 +246,6 @@ def generate_reply() -> str:
         candidate_count=1,
     )
 
-    # streaming aman
     try:
         resp_stream = model.generate_content(
             prompt,
@@ -271,13 +275,9 @@ def generate_reply() -> str:
         if final:
             area.markdown(final)
             return final
-
-        # jika kosong → coba non-stream
     except Exception:
-        # lanjut ke fallback
         pass
 
-    # fallback non-stream
     try:
         resp = model.generate_content(
             prompt,
