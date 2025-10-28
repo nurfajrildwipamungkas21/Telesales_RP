@@ -378,8 +378,8 @@ with st.sidebar:
         if st.button("Buka", key="btn_open_hist") and convos:
             load_convo(convos[sel_idx]["id"])
     with cols[1]:
-        if st.button("Simpan", key="btn_save_hist"):
-            save_current_convo()
+        # tombol Simpan dihapus; autosave aktif
+        st.write("")
     with cols[2]:
         if st.button("Hapus", key="btn_delete_hist") and convos:
             delete_convo(convos[sel_idx]["id"])
@@ -391,6 +391,7 @@ with st.sidebar:
         for k in ["convo_id", "convo_title"]:
             st.session_state.pop(k, None)
 
+# === State init + autosave awal ==============================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "signals" not in st.session_state:
@@ -405,6 +406,10 @@ if "bot_persona" not in st.session_state:
     st.session_state.bot_persona = audience
 if "opener_scenario" not in st.session_state:
     st.session_state.opener_scenario = None
+
+# autosave jika sudah ada pesan tetapi belum memiliki convo_id
+if st.session_state.get("messages") and not st.session_state.get("convo_id"):
+    save_current_convo()
 
 def get_effective_audience() -> str:
     return st.session_state.get("bot_persona", st.session_state.get("aud", "Orang Tua"))
@@ -454,6 +459,7 @@ def _trigger_model_opener(target_audience: str):
     st.session_state.messages.append({"role": "user", "content": ping})
     st.session_state.internal_triggers.append(ping)
     st.session_state.suppress_next_reply = False
+    save_current_convo()  # autosave perubahan intent/triggers
 
 c1, c2 = st.columns(2)
 if c1.button("Opener Orang Tua"):
@@ -714,6 +720,7 @@ if (
         with st.chat_message("assistant", avatar=_bot_avatar(get_effective_audience())):
             st.markdown(reply)
         st.session_state.messages.append({"role": "assistant", "content": reply})
+        save_current_convo()  # autosave setelah balasan singkat
     else:
         with st.chat_message("assistant", avatar=_bot_avatar(get_effective_audience())):
             reply = generate_reply()
