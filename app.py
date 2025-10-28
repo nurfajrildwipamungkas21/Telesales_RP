@@ -81,6 +81,18 @@ def _init_client_or_none():
 
 client = _init_client_or_none()
 
+# === A3c: Apply pending load before any widgets ===============================
+if st.session_state.get("pending_load"):
+    data = st.session_state.pop("pending_load")
+    st.session_state.messages = data.get("messages", [])
+    st.session_state.aud = data.get("audience", st.session_state.get("aud", "Orang Tua"))
+    st.session_state.seg = data.get("segment", st.session_state.get("seg", "SMP"))
+    st.session_state.bot_persona = st.session_state.aud
+    st.session_state.convo_id = data.get("convo_id")
+    st.session_state.convo_title = data.get("title") or ""
+    st.session_state.intent = None
+    st.session_state.suppress_next_reply = True
+
 # === A3b: Storage (SQLite) ====================================================
 DB_PATH = Path(__file__).with_name("telesales_history.sqlite")
 
@@ -167,14 +179,15 @@ def load_convo(convo_id: str):
     if not row:
         return
     msgs = json.loads(row[0]) if row[0] else []
-    st.session_state.messages = msgs
-    st.session_state.aud = row[1] or st.session_state.get("aud", "Orang Tua")
-    st.session_state.seg = row[2] or st.session_state.get("seg", "SMP")
-    st.session_state.bot_persona = st.session_state.aud
-    st.session_state.convo_id = convo_id
-    st.session_state.convo_title = row[3] or _derive_title(msgs)
-    st.session_state.intent = None
-    st.session_state.suppress_next_reply = True
+    # Tunda pengisian widget-bound keys; terapkan sebelum widget dibuat pada run berikutnya
+    st.session_state.pending_load = {
+        "messages": msgs,
+        "audience": row[1] or st.session_state.get("aud", "Orang Tua"),
+        "segment": row[2] or st.session_state.get("seg", "SMP"),
+        "title": row[3] or _derive_title(msgs),
+        "convo_id": convo_id,
+    }
+    st.rerun()
 
 def delete_convo(convo_id: str):
     conn = _get_db()
