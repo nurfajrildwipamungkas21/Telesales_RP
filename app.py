@@ -2,8 +2,8 @@
 # =============================================================================
 # Streamlit Chat - Telesales Ruangguru (Role-Play)
 # Kompatibel SDK baru (google-genai) dan SDK lama (google.generativeai)
-# - Prioritas: SDK baru sesuai panduan migrasi
-# - Fallback otomatis ke SDK lama bila namespace 'google.genai' tidak tersedia
+# Perbaikan: persona = Orang Tua/Murid (bukan sales), opener oleh assistant,
+# avatar dibedakan, hilangkan duplikasi render, prompt anti-pitching.
 # =============================================================================
 import os
 import json
@@ -76,7 +76,7 @@ def _init_client_or_none():
 
 client = _init_client_or_none()
 
-# === A4: Data katalog =========================================================
+# === A4: Data katalog (UI saja; tidak dimasukkan ke prompt) ==================
 CATALOG = {
     "SD": [
         {"kode": "RB-SD-LIVE", "nama": "RuangBelajar Live SD", "fitur": ["Live interaktif", "Bank soal SD", "Rekaman kelas", "Kuis adaptif"], "cocok": ["kelas 4-6", "butuh latihan rutin"]},
@@ -93,15 +93,25 @@ CATALOG = {
     ]
 }
 
-# === A5: Prompt/rekomendasi ===================================================
+# === A5: Prompt untuk persona non-sales ======================================
 def build_system_prompt(audience: str, segment: str) -> str:
+    # Persona ketat: assistant = Orang Tua/Murid. Dilarang menjual/menyebut produk.
     return "\n".join([
-        "Etik: sopan, informatif, tanpa janji palsu, tidak memaksa, tidak meminta data sensitif.",
-        "Tujuan: deteksi kebutuhan belajar, jelaskan fitur relevan, tawarkan sesi lanjutan dengan persetujuan.",
-        "Gaya: ringkas, langkah demi langkah, pertanyaan tertutup lalu terbuka, hindari jargon.",
-        f"Peran Anda: Chatbot yang memerankan calon {audience} segmen {segment}.",
-        "Larangan: jangan janji nilai, jangan minta data pembayaran, hindari SARA."
+        f"Peran: Anda {audience} segmen {segment}.",
+        "Tujuan: sampaikan masalah, konteks, harapan, dan batasan secara natural dari sudut pandang Anda.",
+        "Gaya: 1–3 kalimat, natural, tanpa daftar bullet, tanpa jargon pemasaran, tanpa pengulangan.",
+        "Interaksi: tutup dengan satu pertanyaan klarifikasi singkat bila relevan.",
+        "Larangan keras: jangan menawarkan produk, jangan menyebut nama/kode paket, jangan menyarankan program, jangan ajak membeli, jangan pitching.",
+        "Jika ditanya produk secara langsung: jawab tidak tahu detail produk; kembalikan fokus ke pengalaman pribadi dan kebutuhan.",
     ])
+
+def build_opener_instruction(audience: str, segment: str) -> str:
+    # Instruksi eksplisit untuk menghasilkan pembuka yang bervariasi
+    return (
+        f"Buat pembuka percakapan 1–2 kalimat sebagai {audience} segmen {segment}. "
+        "Nyatakan keluhan atau tujuan spesifik secara natural. "
+        "Tanpa menawarkan produk. Tanpa menyebut paket. Variasikan gaya agar tidak identik dengan keluaran sebelumnya."
+    )
 
 def recommend(segment: str, signals: Dict) -> List[Dict]:
     pilihan = CATALOG.get(segment, [])
@@ -132,26 +142,38 @@ if "signals" not in st.session_state:
     st.session_state.signals = {"fokus_ujian": False, "butuh_live": False, "butuh_latihan": True, "konsep_dasar": False}
 if "suppress_next_reply" not in st.session_state:
     st.session_state.suppress_next_reply = False
+if "intent" not in st.session_state:
+    st.session_state.intent = None  # None | "opener"
+if "internal_triggers" not in st.session_state:
+    st.session_state.internal_triggers = set()  # penanda pesan sintetis
 
 # === A7: Opener ===============================================================
+def _trigger_model_opener(target_audience: str):
+    # set persona di UI agar konsisten
+    st.session_state.aud = target_audience
+    st.session_state.intent = "opener"
+    # tambahkan ping sintetis agar A17 memicu generate_reply tanpa tampil di UI
+    ping = "⏩ OPENER"
+    st.session_state.messages.append({"role": "user", "content": ping})
+    st.session_state.internal_triggers.add(ping)
+    st.session_state.suppress_next_reply = False
+
 c1, c2, c3 = st.columns(3)
 if c1.button("Opener Orang Tua"):
-    st.session_state.messages.append({"role": "user", "content": "Halo, saya orang tua. Anak saya sering bingung saat latihan matematika dan nilainya turun."})
-    st.session_state.suppress_next_reply = True
+    _trigger_model_opener("Orang Tua")
 if c2.button("Opener Murid"):
-    st.session_state.messages.append({"role": "user", "content": "Kak, aku kelas 9. Aku pengin naik nilai IPA, tapi suka keteteran di fisika."})
-    st.session_state.suppress_next_reply = True
+    _trigger_model_opener("Murid")
 if c3.button("Minta Rekomendasi"):
-    st.session_state.messages.append({"role": "user", "content": "Bisa kasih rekomendasi paket belajar yang cocok dengan kebutuhan saya?"})
-    st.session_state.suppress_next_reply = True
+    st.session_state.messages.append({"role": "user", "content": "Bisa kasih rekomendasi paket belajar yang cocok?"})
+    st.session_state.suppress_next_reply = False
 
-# === A8: Header + rekomendasi cepat ==========================================
+# === A8: Header + rekomendasi cepat (UI informatif) ==========================
 st.markdown("## Chat Role-Play")
 sys_prompt = build_system_prompt(audience, segment)
 top_reco = recommend(segment, st.session_state.signals)
-with st.expander("Rekomendasi cepat - dinamis, non-binding"):
+with st.expander("Rekomendasi cepat - ringkas (UI saja)"):
     for r in top_reco:
-        st.write(f"{r['nama']} - fitur: {', '.join(r['fitur'])} | cocok: {', '.join(r['cocok'])}")
+        st.write(f"{r['nama']} • fitur: {', '.join(r['fitur'])} • cocok: {', '.join(r['cocok'])}")
 
 # === A9: Input sebelum render chat ===========================================
 user_input = st.chat_input("Ketik pesan Anda di sini")
@@ -159,32 +181,48 @@ if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.suppress_next_reply = False
 
-# === A10: Render riwayat ======================================================
-AVATAR_USER = "👤"
-AVATAR_BOT  = "🤖"
+# === A10: Render riwayat (avatar dibedakan) ==================================
+AVATAR_USER = "🧑"
+
+def _bot_avatar(aud: str) -> str:
+    return "🧑‍🦳" if aud == "Orang Tua" else "🧑‍🎓"
+
 for m in st.session_state.messages[-max_history:]:
+    if m["content"] in st.session_state.internal_triggers:
+        # sembunyikan ping sintetis dari UI
+        continue
     role = "user" if m["role"] == "user" else "assistant"
-    avatar = AVATAR_USER if role == "user" else AVATAR_BOT
+    avatar = AVATAR_USER if role == "user" else _bot_avatar(st.session_state.aud)
     with st.chat_message(role, avatar=avatar):
         st.markdown(m["content"])
 
 # === A11: Prompt composer =====================================================
-def build_prompt(messages: List[Dict], audience: str, segment: str) -> str:
+def build_prompt(messages: List[Dict], audience: str, segment: str, opener: bool = False) -> str:
     meta = {
         "audience": audience,
         "segment": segment,
         "time": datetime.now().isoformat(timespec="seconds"),
-        "policy": {"no_fake_promises": True, "no_sensitive_data": True, "no_payment_request": True},
+        "policy": {
+            "no_pitch": True,
+            "no_product_names": True,
+            "focus_persona": True,
+        },
+        "mode": "opener" if opener else "dialog",
+        "nonce": int(time.time() * 1000)
     }
     history_lines = []
     for m in messages[-max_history:]:
+        if m["content"] in st.session_state.internal_triggers:
+            continue
         role = "User" if m["role"] == "user" else "Assistant"
         history_lines.append(f"{role}: {m['content']}")
     convo = "\n".join(history_lines)
+    task = build_opener_instruction(audience, segment) if opener else "Jawab sebagai persona Anda. Tetap dilarang pitching."
     return (
         f"[META]\n{json.dumps(meta, ensure_ascii=False)}\n\n"
-        f"[CATALOG]\n{json.dumps(CATALOG.get(segment, []), ensure_ascii=False)}\n\n"
-        f"[CONTEXT]\nPercakapan sebelumnya:\n{convo}\n\n[RESPON]"
+        f"[SYSTEM]\n{build_system_prompt(audience, segment)}\n\n"
+        f"[HISTORY]\n{convo}\n\n"
+        f"[TASK]\n{task}\n\n[RESPON]"
     )
 
 # === A12: Safety settings (SDK baru) =========================================
@@ -274,7 +312,8 @@ def _build_config_new(sys_text: str):
 
 # === A16: Generator abstrak ===================================================
 def generate_reply() -> str:
-    prompt = build_prompt(st.session_state.messages, audience, segment)
+    opener_mode = st.session_state.intent == "opener"
+    prompt = build_prompt(st.session_state.messages, audience, segment, opener=opener_mode)
 
     if SDK == "new":
         cfg = _build_config_new(sys_prompt)
@@ -384,15 +423,19 @@ if (
     and st.session_state.messages[-1]["role"] == "user"
     and not st.session_state.suppress_next_reply
 ):
-    with st.chat_message("assistant", avatar=AVATAR_BOT):
+    with st.chat_message("assistant", avatar=_bot_avatar(st.session_state.aud)):
         reply = generate_reply()
         st.session_state.messages.append({"role": "assistant", "content": reply})
-        st.markdown(reply)
+    # reset intent setelah opener dipicu
+    if st.session_state.intent == "opener":
+        st.session_state.intent = None
 
 # === A18: Export transcript ====================================================
 def to_markdown_transcript(msgs: List[Dict]) -> str:
     lines = ["# Transcript - RG Telesales Role-Play", ""]
     for m in msgs:
+        if m["content"] in st.session_state.internal_triggers:
+            continue
         who = "User" if m["role"] == "user" else "Assistant"
         lines.append(f"**{who}:** {m['content']}")
     return "\n\n".join(lines)
@@ -411,4 +454,4 @@ with cA:
 with cB:
     st.caption("Privasi: hindari data sensitif saat role-play.")
 
-st.caption("Streaming dibatch, fallback aktif, kompatibel SDK baru/lama.")
+st.caption("Persona = Orang Tua/Murid, opener oleh assistant, avatar dinamis, tanpa pitching.")
