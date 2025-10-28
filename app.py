@@ -174,6 +174,28 @@ SEG_RULES = {
     "SMA": "Boleh UTBK dan materi lanjutan; hindari topik terlalu dasar SD/SMP.",
 }
 
+STOP_PHRASES = [
+    "ada yang bisa saya bantu",
+    "bagaimana saya bisa membantu",
+    "bisa dibantu apa",
+    "ada yang bisa dibantu",
+    "apa yang bisa saya bantu",
+]
+
+def build_dialog_instruction(audience: str, segment: str) -> str:
+    rule = SEG_RULES.get(segment, "")
+    banned = "; ".join(STOP_PHRASES)
+    return (
+        f"Anda tetap berperan sebagai {audience} segmen {segment}. "
+        f"Patuh aturan segmen: {rule} "
+        "Tanggapi sesuai konteks pesan terakhir, tidak menawarkan bantuan, tidak mempromosikan produk, "
+        "tidak menggunakan frasa layanan pelanggan. "
+        f"Hindari frasa: {banned}. "
+        "Jika pesan pengguna berupa sapaan/cek ketersediaan (mis. 'bisa dihubungi?' atau menyapa 'Bunda Azam'), "
+        "jawab singkat sebagai pihak tersebut, konfirmasi ketersediaan, lalu boleh satu pertanyaan ringan yang relevan. "
+        "Gunakan orang pertama yang konsisten (contoh untuk Orang Tua: 'Iya, ini Bundanya Azam. Bisa dihubungi.')."
+    )
+
 def build_opener_instruction(audience: str, segment: str) -> str:
     scenario = st.session_state.get("opener_scenario") or _sample_scenario(audience, segment)
     rule = SEG_RULES.get(segment, "")
@@ -306,7 +328,7 @@ def build_prompt(messages: List[Dict], audience: str, segment: str, opener: bool
             role = "User" if m["role"] == "user" else "Assistant"
             history_lines.append(f"{role}: {m['content']}")
     convo = "\n".join(history_lines)
-    task = build_opener_instruction(audience, segment) if opener else "Jawab sebagai persona Anda. Tetap dilarang pitching."
+    task = build_opener_instruction(audience, segment) if opener else build_dialog_instruction(audience, segment)
     return (
         f"[META]\n{json.dumps(meta, ensure_ascii=False)}\n\n"
         f"[SYSTEM]\n{build_system_prompt(audience, segment)}\n\n"
