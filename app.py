@@ -29,6 +29,11 @@ html, body {scroll-behavior: smooth;}
 @media (max-width: 600px){
   .block-container {padding-left: .6rem; padding-right: .6rem;}
 }
+/* Sidebar desktop: rapatkan kolom tombol */
+@media (min-width: 992px){
+  section[data-testid="stSidebar"] div[data-testid="column"]{ padding-right:.25rem !important; }
+  section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]{ gap:.25rem !important; }
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -392,23 +397,21 @@ with st.sidebar:
         key="hist_select_idx",
     )
     st.caption("Aksi riwayat")
-    cols = st.columns(3)
+    cols = st.columns([1, 1, 1], gap="small")
     with cols[0]:
-        if st.button("Buka", key="btn_open_hist") and convos:
+        if st.button("Buka", key="btn_open_hist", use_container_width=True) and convos:
             load_convo(convos[sel_idx]["id"])
     with cols[1]:
-        # tombol Simpan dihapus; autosave aktif
-        st.write("")
+        if st.button("Sesi Baru", key="btn_new_session", use_container_width=True):
+            st.session_state.messages = []
+            st.session_state.internal_triggers = []
+            st.session_state.intent = None
+            st.session_state.suppress_next_reply = True
+            for k in ["convo_id", "convo_title"]:
+                st.session_state.pop(k, None)
     with cols[2]:
-        if st.button("Hapus", key="btn_delete_hist") and convos:
+        if st.button("Hapus", key="btn_delete_hist", use_container_width=True) and convos:
             delete_convo(convos[sel_idx]["id"])
-    if st.button("Sesi Baru", key="btn_new_session"):
-        st.session_state.messages = []
-        st.session_state.internal_triggers = []
-        st.session_state.intent = None
-        st.session_state.suppress_next_reply = True
-        for k in ["convo_id", "convo_title"]:
-            st.session_state.pop(k, None)
 
 # === State init + autosave awal ==============================================
 if "messages" not in st.session_state:
