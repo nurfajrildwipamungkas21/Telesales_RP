@@ -1,16 +1,25 @@
 # app.py
 # =============================================================================
 # Streamlit Chat - Telesales Ruangguru (Role-Play) + Gemini 2.5 Flash
-# Stabil: prompt ringkas, streaming aman, fallback non-stream, avatar dibedakan
+# Migrasi penuh ke Google GenAI SDK:
+# - Client terpusat: genai.Client()
+# - Streaming: client.models.generate_content_stream(...)
+# - Non-stream fallback: client.models.generate_content(...)
+# - Config via types.GenerateContentConfig (system_instruction, safety_settings, sampling)
+# - Nama model tanpa "models/" prefix
 # =============================================================================
 import os
 import json
 import time
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 import streamlit as st
-import google.generativeai as genai
+
+# Google GenAI SDK (sesuai migrasi)
+# Ref: https://ai.google.dev/gemini-api/docs/migrate
+from google import genai
+from google.genai import types
 
 # === A0: Page config + CSS ====================================================
 st.set_page_config(page_title="RG Telesales - Role-Play Chat", layout="wide")
@@ -28,39 +37,24 @@ html, body {scroll-behavior: smooth;}
     unsafe_allow_html=True,
 )
 
-# === A1: API key dan model (cached) ==========================================
-API_KEY = os.getenv(
-    "GEMINI_API_KEY",
-    "AIzaSyDd19AHP6cciyErg-bky3u07fXVGnXaraE"  # demo untuk portfolio
-)
-MODEL_NAME = "models/gemini-2.5-flash"
-
-def _build_safety_kwargs() -> dict:
-    """Kompabilitas lintas-versi SDK. Jika enum tidak ada, kembalikan {}."""
-    try:
-        from google.generativeai.types import HarmCategory, HarmBlockThreshold
-    except Exception:
-        return {}
-    pairs = [
-        ("HARM_CATEGORY_HARASSMENT", "BLOCK_MEDIUM_AND_ABOVE"),
-        ("HARM_CATEGORY_HATE_SPEECH", "BLOCK_MEDIUM_AND_ABOVE"),
-        ("HARM_CATEGORY_SEXUAL_CONTENT", "BLOCK_MEDIUM_AND_ABOVE"),
-        ("HARM_CATEGORY_DANGEROUS_CONTENT", "BLOCK_MEDIUM_AND_ABOVE"),
-    ]
-    settings = []
-    for cname, tname in pairs:
-        cat = getattr(HarmCategory, cname, None)
-        thr = getattr(HarmBlockThreshold, tname, None)
-        if cat is not None and thr is not None:
-            settings.append({"category": cat, "threshold": thr})
-    return {"safety_settings": settings} if settings else {}
+# === A1: API key dan client ===================================================
+# SDK baru otomatis membaca GEMINI_API_KEY atau GOOGLE_API_KEY dari environment.
+# Boleh juga diset eksplisit ke Client bila diperlukan.
+API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
 @st.cache_resource(show_spinner=False)
-def _init_model():
-    genai.configure(api_key=API_KEY)
-    return genai.GenerativeModel(model_name=MODEL_NAME, **_build_safety_kwargs())
+def _init_client() -> genai.Client:
+    return genai.Client(api_key=API_KEY) if API_KEY else genai.Client()
 
-model = _init_model()
+client = _init_client()
+
+# Model utama + fallback sesuai ketersediaan akun/region
+MODEL_PRIMARY = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL_FALLBACKS = [
+    MODEL_PRIMARY,
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
 
 # === A2: Katalog dummy ========================================================
 CATALOG = {
@@ -111,8 +105,8 @@ with st.sidebar:
     segment = st.selectbox("Segmen kelas", ["SD", "SMP", "SMA"], index=1, key="seg")
     temperature = st.slider("Creativity (temperature)", 0.0, 1.0, 0.3, 0.1, key="temp")
     max_history = st.slider("Batas riwayat pesan", 4, 32, 8, 2, key="hist")
-    st.caption(f"Model: {MODEL_NAME}")
-    st.caption("Kunci demo tertanam untuk portfolio")
+    st.caption(f"Model: {MODEL_PRIMARY}")
+    st.caption("API key dibaca dari GEMINI_API_KEY/GOOGLE_API_KEY (env)")
 
 # === A6: Session state ========================================================
 if "messages" not in st.session_state:
@@ -158,8 +152,8 @@ if user_input:
     st.session_state.suppress_next_reply = False
 
 # === A10: Render riwayat dengan avatar valid =================================
-AVATAR_USER = "👤"   # emoji valid, bukan huruf tunggal
-AVATAR_BOT  = "🤖"   # emoji valid, bukan huruf tunggal
+AVATAR_USER = "👤"
+AVATAR_BOT  = "🤖"
 
 for m in st.session_state.messages[-max_history:]:
     role = "user" if m["role"] == "user" else "assistant"
@@ -168,7 +162,7 @@ for m in st.session_state.messages[-max_history:]:
         st.markdown(m["content"])
 
 # === A11: Prompt composer =====================================================
-def build_prompt(messages: List[Dict], sys_text: str, audience: str, segment: str) -> str:
+def build_prompt(messages: List[Dict], audience: str, segment: str) -> str:
     meta = {
         "audience": audience,
         "segment": segment,
@@ -182,114 +176,131 @@ def build_prompt(messages: List[Dict], sys_text: str, audience: str, segment: st
     convo = "\n".join(history_lines)
     return (
         f"[META]\n{json.dumps(meta, ensure_ascii=False)}\n\n"
-        f"[SYSTEM]\n{sys_text}\n"
-        "Taktik: ringkas, mulai dengan 1–2 pertanyaan klarifikasi, akhiri opsi tindak lanjut tanpa menekan. "
-        "Batas 6 baris.\n\n"
         f"[CATALOG]\n{json.dumps(CATALOG.get(segment, []), ensure_ascii=False)}\n\n"
         f"[CONTEXT]\nPercakapan sebelumnya:\n{convo}\n\n[RESPON]"
     )
 
-# === A12: Util ekstraksi teks ================================================
+# === A12: Safety settings (SDK baru) =========================================
+def _safety_settings() -> List[types.SafetySetting]:
+    # Ref: safety_settings via config di SDK baru
+    return [
+        types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_MEDIUM_AND_ABOVE"),
+        types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_MEDIUM_AND_ABOVE"),
+        types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_MEDIUM_AND_ABOVE"),
+        types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_MEDIUM_AND_ABOVE"),
+    ]
+
+# === A13: Util ekstraksi teks dan alasan =====================================
+def _get_finish_reason(candidate: Any) -> Optional[str]:
+    # Robust terhadap snake_case / camelCase
+    fr = getattr(candidate, "finish_reason", None)
+    if not fr:
+        fr = getattr(candidate, "finishReason", None)
+    return str(fr) if fr else None
+
 def _extract_text_from_response(resp) -> str:
+    # Utama: resp.text
+    t = getattr(resp, "text", None)
+    if isinstance(t, str) and t.strip():
+        return t.strip()
+
+    # Alternatif: gabung parts
     try:
-        t = getattr(resp, "text", None)
-        if isinstance(t, str) and t.strip():
-            return t
-    except Exception:
-        pass
-    try:
-        buf: List[str] = []
-        for cand in (getattr(resp, "candidates", None) or []):
+        cands = getattr(resp, "candidates", None) or []
+        pieces: List[str] = []
+        for cand in cands:
             content = getattr(cand, "content", None)
             parts = getattr(content, "parts", None) or []
             for p in parts:
                 tx = getattr(p, "text", None)
                 if isinstance(tx, str) and tx:
-                    buf.append(tx)
-        if buf:
-            return "".join(buf)
+                    pieces.append(tx)
+        if pieces:
+            return "".join(pieces).strip()
+        # Tidak ada teks: kembalikan alasan bila ada
+        if cands:
+            fr = _get_finish_reason(cands[0])
+            if fr and fr.upper() != "STOP":
+                return f"Tidak ada keluaran karena finish_reason={fr}"
     except Exception:
         pass
-    fb = getattr(resp, "prompt_feedback", None)
-    reason = getattr(fb, "block_reason", None) if fb else None
-    if reason:
-        return f"Tidak ada keluaran karena diblokir kebijakan: {reason}"
     return ""
 
-def _extract_text_from_stream(event) -> Optional[str]:
-    try:
-        t = getattr(event, "text", None)
-        if isinstance(t, str) and t:
-            return t
-    except Exception:
-        pass
-    try:
-        for cand in (getattr(event, "candidates", None) or []):
-            content = getattr(cand, "content", None)
-            parts = getattr(content, "parts", None) or []
-            for p in parts:
-                tx = getattr(p, "text", None)
-                if isinstance(tx, str) and tx:
-                    return tx
-    except Exception:
-        pass
-    return None
-
-# === A13: Generate - streaming aman + fallback non-stream =====================
-def generate_reply() -> str:
-    prompt = build_prompt(st.session_state.messages, sys_prompt, audience, segment)
-    cfg = genai.types.GenerationConfig(
+# === A14: Generate - streaming via GenAI SDK + fallback ======================
+def _build_config(sys_text: str) -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=sys_text,             # system instruction via config (SDK baru)
         temperature=float(temperature),
         top_p=0.9,
         top_k=40,
         max_output_tokens=256,
         candidate_count=1,
+        safety_settings=_safety_settings(),
     )
 
-    try:
-        resp_stream = model.generate_content(
-            prompt,
-            generation_config=cfg,
-            stream=True,
-        )
-        area = st.empty()
-        pieces: List[str] = []
-        last_push = time.perf_counter()
-        BATCH_CHARS = 160
-        MIN_INTERVAL = 0.04
-        pending = 0
+def generate_reply() -> str:
+    prompt = build_prompt(st.session_state.messages, audience, segment)
+    cfg = _build_config(sys_prompt)
 
-        for event in resp_stream:
-            piece = _extract_text_from_stream(event)
-            if not piece:
-                continue
-            pieces.append(piece)
-            pending += len(piece)
-            now = time.perf_counter()
-            if pending >= BATCH_CHARS or (now - last_push) >= MIN_INTERVAL:
-                area.markdown("".join(pieces))
-                pending = 0
-                last_push = now
+    # 1) Streaming attempt berurutan dengan fallback model
+    for model_name in MODEL_FALLBACKS:
+        try:
+            stream = client.models.generate_content_stream(
+                model=model_name,
+                contents=prompt,
+                config=cfg,
+            )
+            area = st.empty()
+            pieces: List[str] = []
+            last_push = time.perf_counter()
+            BATCH_CHARS = 160
+            MIN_INTERVAL = 0.04
+            pending = 0
 
-        final = "".join(pieces).strip()
-        if final:
-            area.markdown(final)
-            return final
-    except Exception:
-        pass
+            for chunk in stream:
+                piece = getattr(chunk, "text", None)
+                if not isinstance(piece, str) or not piece:
+                    continue
+                pieces.append(piece)
+                pending += len(piece)
+                now = time.perf_counter()
+                if pending >= BATCH_CHARS or (now - last_push) >= MIN_INTERVAL:
+                    area.markdown("".join(pieces))
+                    pending = 0
+                    last_push = now
 
-    try:
-        resp = model.generate_content(
-            prompt,
-            generation_config=cfg,
-            stream=False,
-        )
-        text = _extract_text_from_response(resp).strip()
-        return text or "Model tidak mengembalikan teks"
-    except Exception as e_fallback:
-        return f"Gagal memproses: {type(e_fallback).__name__}: {e_fallback}"
+            final = "".join(pieces).strip()
+            if final:
+                area.markdown(final)
+                return final
+        except Exception:
+            # lanjut ke model fallback berikut
+            continue
 
-# === A14: Eksekusi balasan jika bukan opener =================================
+    # 2) Non-stream fallback: ambil first non-empty text atau alasan blokir
+    last_reason = ""
+    for model_name in MODEL_FALLBACKS:
+        try:
+            resp = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=cfg,
+            )
+            text = _extract_text_from_response(resp)
+            if text:
+                return text
+            # simpan alasan bila ada untuk pelaporan akhir
+            cands = getattr(resp, "candidates", None) or []
+            if cands:
+                fr = _get_finish_reason(cands[0])
+                if fr and fr.upper() != "STOP":
+                    last_reason = f"finish_reason={fr}"
+        except Exception as e:
+            last_reason = f"{type(e).__name__}: {e}"
+
+    return f"Model tidak mengembalikan teks. {last_reason or 'Coba ganti model/parameter.'}"
+
+# === A15: Eksekusi balasan jika bukan opener =================================
 if (
     st.session_state.messages
     and st.session_state.messages[-1]["role"] == "user"
@@ -300,7 +311,7 @@ if (
         st.session_state.messages.append({"role": "assistant", "content": reply})
         st.markdown(reply)
 
-# === A15: Export transcript ===================================================
+# === A16: Export transcript ===================================================
 def to_markdown_transcript(msgs: List[Dict]) -> str:
     lines = ["# Transcript - RG Telesales Role-Play", ""]
     for m in msgs:
@@ -322,4 +333,4 @@ with cA:
 with cB:
     st.caption("Privasi: hindari data sensitif saat role-play.")
 
-st.caption("Portfolio demo. Streaming dibatch, fallback aktif, opener tanpa auto-reply, avatar dibedakan.")
+st.caption("Portfolio demo. Streaming dibatch, fallback aktif, opener tanpa auto-reply, avatar dibedakan. SDK: google-genai.")
