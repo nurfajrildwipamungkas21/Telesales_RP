@@ -363,7 +363,7 @@ def recommend(segment: str, signals: Dict) -> List[Dict]:
         skor = 0
         if signals.get("fokus_ujian") and "UTBK" in item["nama"]:
             skor += 3
-        if signals.get("butuh_live") and ("Live" in item["nama"] atau any("Live" in f for f in item["fitur"])):
+        if signals.get("butuh_live") and ("Live" in item["nama"] or any("Live" in f for f in item["fitur"])):
             skor += 2
         if signals.get("butuh_latihan") and any(("Bank soal" in f) or ("Tryout" in f) for f in item["fitur"]):
             skor += 2
@@ -782,7 +782,7 @@ def generate_reply() -> str:
                 pieces.append(piece)
                 pending += len(piece)
                 now = time.perf_counter()
-                if pending >= BATCH_CHARS atau (now - last_push) >= MIN_INTERVAL:
+                if pending >= BATCH_CHARS or (now - last_push) >= MIN_INTERVAL:
                     area.markdown("".join(pieces))
                     pending = 0
                     last_push = now
