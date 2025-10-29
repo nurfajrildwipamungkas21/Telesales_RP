@@ -686,7 +686,7 @@ def _extract_text_from_stream_event(event) -> Optional[str]:
         pass
     return None
 
-# === A15: Config builder (SDK baru) ==========================================
+# === A1m: Config builder (SDK baru) ==========================================
 def _build_config_new(sys_text: str):
     return types_new.GenerateContentConfig(
         system_instruction=sys_text,
