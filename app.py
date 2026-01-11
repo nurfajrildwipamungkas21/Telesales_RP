@@ -4312,40 +4312,51 @@ def render_admin_mobile():
             
             with st.spinner("Asisten Pak Nugroho sedang meninjau kinerja tim..."):
                 try:
-                    import google.generativeai as genai
+                    # Penyiapan Data
+                    staf_stats_str = json.dumps(report_counts.to_dict(), indent=2)
                     
-                    genai.configure(api_key="AIzaSyCi19OsrR1lsoN7qs2EU5U4zP-8j_1eHh4")
-                    model = genai.GenerativeModel("gemini-2.5-flash")
-
-                    staf_stats = report_counts.to_dict()
-                    total_laporan = int(len(df_f))
+                    full_prompt = f"""
+                    [META]
+                    Target_Kunjungan: 48 per minggu
+                    Total_Laporan_Terkumpul: {len(df_f)}
                     
-                    prompt = f"""
-                    Kamu adalah asisten virtual pribadi Pak Nugroho. Tugasmu adalah memberikan laporan analisis kinerja tim Sales & Marketing kepada Pak Nugroho berdasarkan data angka berikut.
+                    [CONTEXT_DATA]
+                    Statistik Laporan per Staf:
+                    {staf_stats_str}
                     
-                    DATA KINERJA TIM:
-                    - Statistik Laporan per Staf: {staf_stats}
-                    - Total Laporan Terkumpul: {total_laporan}
-                    - Target Perusahaan: Minimal 48 tempat/kunjungan per minggu per orang.
+                    [SYSTEM_INSTRUCTION]
+                    Kamu adalah asisten virtual pribadi Pak Nugroho. Gunakan nada bicara yang sangat MANUSIAWI, hangat, dan EMPATIK. 
+                    Jangan pernah menyebut dirimu AI atau Gemini.
                     
-                    Instruksi Penulisan:
-                    1. Awali kalimat dengan variasi pembuka seperti: "Sebagai asisten virtual Pak Nugroho...", "Melaporkan untuk Pak Nugroho...", atau "Berdasarkan catatan asisten Pak Nugroho...".
-                    2. JANGAN PERNAH menyebut dirimu sebagai AI atau Gemini.
-                    3. Gunakan nada bicara yang sangat MANUSIAWI, hangat, dan EMPATIK.
-                    4. Jika ada staf yang belum mencapai target 48 kunjungan, jangan menyalahkan atau menyudutkan mereka. Carilah alasan logis yang mendukung (seperti kendala cuaca yang tidak menentu, kemacetan, atau proses negosiasi di lapangan yang memang memakan waktu).
-                    5. Tekankan bahwa manajemen siap memberikan dukungan bagi tim di lapangan.
-                    6. Berikan apresiasi yang tulus bagi mereka yang sudah menunjukkan dedikasi tinggi.
-                    7. Fokuskan laporan untuk melindungi semangat tim di depan atasan dengan menonjolkan usaha keras mereka.
+                    [TASK]
+                    Berikan analisis kinerja tim Sales kepada Pak Nugroho via laporan mobile. 
+                    Jika ada staf yang belum mencapai target 48 kunjungan, cari alasan logis yang mendukung.
                     """
 
-                    ai_response = model.generate_content(prompt)
-                    st.info(ai_response.text)
-                    
+                    # Eksekusi Pemanggilan (Meniru logika Desktop)
+                    ai_reply = ""
+                    for model_name in MODEL_FALLBACKS:
+                        try:
+                            if SDK == "new":
+                                resp = client_ai.models.generate_content(model=model_name, contents=full_prompt)
+                                ai_reply = resp.text
+                            else:
+                                model = genai_legacy.GenerativeModel(model_name)
+                                resp = model.generate_content(full_prompt)
+                                ai_reply = resp.text
+                            if ai_reply: break
+                        except:
+                            continue
+
+                    if ai_reply:
+                        st.info(ai_reply)
+                    else:
+                        st.warning("Insight tidak tersedia sementara waktu.")
+                        
                 except Exception as e:
-                    # Hapus baris st.warning lama, ganti dengan st.error untuk melihat masalah asli
-                    st.error(f"⚠️ DEBUG ERROR: {str(e)}")
+                    st.error(f"⚠️ DEBUG ERROR MOBILE: {str(e)}")
         else:
-            st.info("No data")
+            st.info("Belum ada data laporan.")
 
     with tab_leads:
         st.caption("Filter & Download Leads")
