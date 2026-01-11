@@ -1704,25 +1704,6 @@ except AuthError:
     st.error("Dropbox Error: Token Autentikasi tidak valid.")
 except Exception as e:
     st.error(f"Dropbox Error: {e}")
-    
-
-# === Konfigurasi AI Robust (Tiruan Proyek Telesales) ===
-SDK = "new"
-try:
-    from google import genai as genai_new
-    from google.genai import types as types_new
-except Exception:
-    SDK = "legacy"
-    import google.generativeai as genai_legacy
-
-API_KEY = "AIzaSyCi19OsrR1lsoN7qs2EU5U4zP-8j_1eHh4"
-# Daftar model cadangan agar tidak muncul pesan "berhalangan" jika satu model error
-MODEL_FALLBACKS = ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-pro"]
-
-if SDK == "new":
-    client_ai = genai_new.Client(api_key=API_KEY)
-else:
-    genai_legacy.configure(api_key=API_KEY)
 
 
 # =========================================================
@@ -4293,82 +4274,40 @@ def render_admin_mobile():
         except:
             pass
 
-# TABS NAVIGATION MOBILE
-    tab_prod, tab_leads, tab_data, tab_cfg = st.tabs(["📈 Grafik", "🧲 Leads", "📦 Data", "⚙️ Config"])
+    # TABS NAVIGATION MOBILE
+    tab_prod, tab_leads, tab_data, tab_cfg = st.tabs(
+        ["📈 Grafik", "🧲 Leads", "📦 Data", "⚙️ Config"])
 
+    # A. Tab Produktivitas
     with tab_prod:
         st.caption("Analisa Kinerja")
         if not df_all.empty:
-            days = st.selectbox("Hari Terakhir:", [7, 30, 90], key="mob_adm_days")
+            days = st.selectbox("Hari Terakhir:", [
+                                7, 30, 90], key="mob_adm_days")
             start_d = datetime.now(tz=TZ_JKT).date() - timedelta(days=days)
             df_f = df_all[df_all["Tgl"] >= start_d].copy()
             st.metric("Total Laporan", len(df_f))
-            
-            report_counts = df_f[COL_NAMA].value_counts()
-            st.bar_chart(report_counts)
-
-            st.divider()
-            st.markdown("#### 🤖 AI Management Insight")
-            
-            with st.spinner("Asisten Pak Nugroho sedang meninjau kinerja tim..."):
-                try:
-                    # Penyiapan Data
-                    staf_stats_str = json.dumps(report_counts.to_dict(), indent=2)
-                    
-                    full_prompt = f"""
-                    [META]
-                    Target_Kunjungan: 48 per minggu
-                    Total_Laporan_Terkumpul: {len(df_f)}
-                    
-                    [CONTEXT_DATA]
-                    Statistik Laporan per Staf:
-                    {staf_stats_str}
-                    
-                    [SYSTEM_INSTRUCTION]
-                    Kamu adalah asisten virtual pribadi Pak Nugroho. Gunakan nada bicara yang sangat MANUSIAWI, hangat, dan EMPATIK. 
-                    Jangan pernah menyebut dirimu AI atau Gemini.
-                    
-                    [TASK]
-                    Berikan analisis kinerja tim Sales kepada Pak Nugroho via laporan mobile. 
-                    Jika ada staf yang belum mencapai target 48 kunjungan, cari alasan logis yang mendukung.
-                    """
-
-                    # Eksekusi Pemanggilan (Meniru logika Desktop)
-                    ai_reply = ""
-                    for model_name in MODEL_FALLBACKS:
-                        try:
-                            if SDK == "new":
-                                resp = client_ai.models.generate_content(model=model_name, contents=full_prompt)
-                                ai_reply = resp.text
-                            else:
-                                model = genai_legacy.GenerativeModel(model_name)
-                                resp = model.generate_content(full_prompt)
-                                ai_reply = resp.text
-                            if ai_reply: break
-                        except:
-                            continue
-
-                    if ai_reply:
-                        st.info(ai_reply)
-                    else:
-                        st.warning("Insight tidak tersedia sementara waktu.")
-                        
-                except Exception as e:
-                    st.error(f"⚠️ DEBUG ERROR MOBILE: {str(e)}")
+            st.bar_chart(df_f[COL_NAMA].value_counts())
         else:
-            st.info("Belum ada data laporan.")
+            st.info("No data")
 
+    # B. Tab Leads
     with tab_leads:
         st.caption("Filter & Download Leads")
-        sel_int = st.selectbox("Interest:", ["Under 50% (A)", "50-75% (B)", "75%-100%"], key="mob_adm_int")
+        sel_int = st.selectbox(
+            "Interest:", ["Under 50% (A)", "50-75% (B)", "75%-100%"], key="mob_adm_int")
         if not df_all.empty and COL_INTEREST in df_all.columns:
-            df_leads = df_all[df_all[COL_INTEREST].astype(str).str.strip() == sel_int]
-            st.dataframe(df_leads[[COL_NAMA_KLIEN, COL_KONTAK_KLIEN]], use_container_width=True)
+            df_leads = df_all[df_all[COL_INTEREST].astype(
+                str).str.strip() == sel_int]
+            st.dataframe(
+                df_leads[[COL_NAMA_KLIEN, COL_KONTAK_KLIEN]], use_container_width=True)
             if HAS_OPENPYXL:
                 xb = df_to_excel_bytes(df_leads, sheet_name="Leads")
                 if xb:
-                    st.download_button("⬇️ Excel Leads", data=xb, file_name=f"leads_{sel_int}.xlsx", use_container_width=True)
+                    st.download_button(
+                        "⬇️ Excel Leads", data=xb, file_name=f"leads_{sel_int}.xlsx", use_container_width=True)
 
+    # C. Tab Data Master
     with tab_data:
         st.caption("Master Data Laporan")
         if st.button("Refresh Data", use_container_width=True, key="mob_ref_data"):
@@ -4376,11 +4315,15 @@ def render_admin_mobile():
             st.rerun()
         st.dataframe(df_all, use_container_width=True)
 
+    # D. Tab Config (INTEGRASI TAMBAH & HAPUS STAF)
     with tab_cfg:
         st.markdown("#### 👥 Kelola Personel (Staf)")
+
+        # --- SUB-BAGIAN: TAMBAH STAF ---
         with st.form("mob_add_staff"):
             st.markdown("➕ **Tambah Staf Baru**")
-            new_st = st.text_input("Nama Staf", placeholder="Ketik nama baru...")
+            new_st = st.text_input(
+                "Nama Staf", placeholder="Ketik nama baru...")
             if st.form_submit_button("Simpan Staf", use_container_width=True):
                 if new_st.strip():
                     ok, msg = tambah_staf_baru(new_st)
@@ -4393,12 +4336,22 @@ def render_admin_mobile():
                         st.error(msg)
                 else:
                     st.error("Nama tidak boleh kosong.")
-        st.markdown("---") 
+
+        st.markdown("---")  # Pembatas visual
+
+        # --- SUB-BAGIAN: HAPUS STAF (FITUR BARU) ---
         st.markdown("#### 🗑️ Hapus Staf")
         st.caption("Menghapus nama dari daftar pelapor.")
+
+        # Ambil daftar staf terbaru untuk dropdown hapus
         staff_now = get_daftar_staf_terbaru()
-        hapus_select = st.selectbox("Pilih staf yang akan dihapus:", ["-- Pilih Staf --"] + staff_now, key="mob_del_st")
-        confirm_del = st.checkbox("Konfirmasi penghapusan permanen", key="mob_del_confirm")
+        hapus_select = st.selectbox("Pilih staf yang akan dihapus:", [
+                                    "-- Pilih Staf --"] + staff_now, key="mob_del_st")
+
+        # Checkbox konfirmasi agar tidak sengaja terpencet
+        confirm_del = st.checkbox(
+            "Konfirmasi penghapusan permanen", key="mob_del_confirm")
+
         if st.button("🔥 Konfirmasi Hapus", type="primary", use_container_width=True, key="mob_btn_del"):
             if hapus_select == "-- Pilih Staf --":
                 st.error("Pilih nama staf terlebih dahulu!")
@@ -4408,48 +4361,21 @@ def render_admin_mobile():
                 with st.spinner("Menghapus..."):
                     ok, m = hapus_staf_by_name(hapus_select)
                     if ok:
-                        force_audit_log(actor=st.session_state.get("user_name", "Admin Mobile"), action="❌ DELETE USER", target_sheet="Config_Staf", chat_msg=f"Menghapus staf via HP: {hapus_select}", details_input=f"User {hapus_select} telah dihapus dari sistem mobile.")
+                        # Log Audit (Penting agar terekam siapa yang menghapus via HP)
+                        force_audit_log(
+                            actor=st.session_state.get(
+                                "user_name", "Admin Mobile"),
+                            action="❌ DELETE USER",
+                            target_sheet="Config_Staf",
+                            chat_msg=f"Menghapus staf via HP: {hapus_select}",
+                            details_input=f"User {hapus_select} telah dihapus dari sistem mobile."
+                        )
                         st.success(f"Staf {hapus_select} Berhasil dihapus!")
                         st.cache_data.clear()
                         time.sleep(1.5)
                         st.rerun()
                     else:
                         st.error(m)
-
-            # --- SUB-BAGIAN: HAPUS STAF ---
-            st.markdown("#### 🗑️ Hapus Staf")
-            st.caption("Menghapus nama dari daftar pelapor.")
-
-            staff_now = get_daftar_staf_terbaru()
-            hapus_select = st.selectbox("Pilih staf yang akan dihapus:", [
-                                        "-- Pilih Staf --"] + staff_now, key="mob_del_st")
-
-            confirm_del = st.checkbox(
-                "Konfirmasi penghapusan permanen", key="mob_del_confirm")
-
-            if st.button("🔥 Konfirmasi Hapus", type="primary", use_container_width=True, key="mob_btn_del"):
-                if hapus_select == "-- Pilih Staf --":
-                    st.error("Pilih nama staf terlebih dahulu!")
-                elif not confirm_del:
-                    st.error("Silakan centang kotak konfirmasi penghapusan.")
-                else:
-                    with st.spinner("Menghapus..."):
-                        ok, m = hapus_staf_by_name(hapus_select)
-                        if ok:
-                            force_audit_log(
-                                actor=st.session_state.get(
-                                    "user_name", "Admin Mobile"),
-                                action="❌ DELETE USER",
-                                target_sheet="Config_Staf",
-                                chat_msg=f"Menghapus staf via HP: {hapus_select}",
-                                details_input=f"User {hapus_select} telah dihapus dari sistem mobile."
-                            )
-                            st.success(f"Staf {hapus_select} Berhasil dihapus!")
-                            st.cache_data.clear()
-                            time.sleep(1.5)
-                            st.rerun()
-                        else:
-                            st.error(m)
 
 
 def render_audit_mobile():
@@ -5108,9 +5034,8 @@ elif menu_nav == "📊 Dashboard Admin":
                                             st.rerun()
                 tab_ptr += 1
 
-
             # -----------------------------------------------------------
-            # 2. TAB PRODUKTIVITAS (PLOTLY CHART + AI GEMINI)
+            # 2. TAB PRODUKTIVITAS (PLOTLY CHART)
             # -----------------------------------------------------------
             with all_tabs[tab_ptr]:
                 st.markdown("### 🚀 Analisa Kinerja Tim")
@@ -5124,65 +5049,15 @@ elif menu_nav == "📊 Dashboard Admin":
                     col_m1, col_m2 = st.columns(2)
                     with col_m1:
                         st.markdown("#### Total Laporan per Staf")
-                        report_counts = df_f[COL_NAMA].value_counts()
-                        st.bar_chart(report_counts)
+                        st.bar_chart(df_f[COL_NAMA].value_counts())
                     with col_m2:
                         if HAS_PLOTLY:
                             fig = px.pie(df_f, names="Kategori_Aktivitas",
                                          title="Proporsi Jenis Aktivitas", hole=0.3)
                             st.plotly_chart(fig, use_container_width=True)
-
-                    # --- INTEGRASI AI GEMINI UNTUK DESKTOP ---
-                    st.divider()
-                    st.markdown("#### 🤖 AI Management Insight")
-                    with st.spinner("Asisten Pak Nugroho sedang meninjau kinerja tim..."):
-                        # Penyiapan Data Non-Visual
-                        staf_stats_str = json.dumps(report_counts.to_dict(), indent=2)
-                        
-                        # 1. Konstruksi Prompt Terstruktur (Meniru format [META], [SYSTEM], [TASK])
-                        full_prompt = f"""
-                        [META]
-                        Target_Kunjungan: 48 per minggu
-                        Total_Laporan_Terkumpul: {len(df_f)}
-                        
-                        [CONTEXT_DATA]
-                        Statistik Laporan per Staf:
-                        {staf_stats_str}
-                        
-                        [SYSTEM_INSTRUCTION]
-                        Kamu adalah asisten virtual pribadi Pak Nugroho. Gunakan nada bicara yang sangat MANUSIAWI, hangat, dan EMPATIK. 
-                        Jangan pernah menyebut dirimu AI atau Gemini.
-                        
-                        [TASK]
-                        Berikan analisis kinerja tim Sales kepada Pak Nugroho. 
-                        Jika ada staf yang belum mencapai target 48 kunjungan, cari alasan logis yang mendukung (seperti kendala cuaca atau macet) agar semangat mereka tidak jatuh.
-                        Apresiasi staf yang berdedikasi tinggi.
-                        """
-
-                        # 2. Eksekusi Pemanggilan dengan Mekanisme Fallback (Anti-Gagal)
-                        ai_reply = ""
-                        last_error = ""
-                        
-                        for model_name in MODEL_FALLBACKS:
-                            try:
-                                if SDK == "new":
-                                    resp = client_ai.models.generate_content(model=model_name, contents=full_prompt)
-                                    ai_reply = resp.text
-                                else:
-                                    model = genai_legacy.GenerativeModel(model_name)
-                                    resp = model.generate_content(full_prompt)
-                                    ai_reply = resp.text
-                                
-                                if ai_reply: break # Jika berhasil, keluar dari perulangan model
-                            except Exception as e:
-                                last_error = str(e)
-                                continue # Coba model berikutnya jika model ini gagal
-
-                        # 3. Tampilkan Hasil
-                        if ai_reply:
-                            st.info(ai_reply)
-                        else:
-                            st.error(f"⚠️ Gagal mendapatkan insight setelah mencoba semua model. Error terakhir: {last_error}")
+                else:
+                    st.info("Belum ada data.")
+            tab_ptr += 1
 
             # -----------------------------------------------------------
             # 3. TAB LEADS & INTEREST (EXPORT ENABLED)
